@@ -1,0 +1,2 @@
+# timeshit
+Simple time tracker
