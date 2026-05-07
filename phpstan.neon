@@ -1,0 +1,21 @@
+includes:
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
+
+parameters:
+    # Levels:
+    #   0 — basic checks: unknown classes/functions/methods, wrong arg counts
+    #   1 — undefined variables, unknown magic methods/properties on classes with __get/__set
+    #   2 — unknown methods on all expressions (not just $this), static method validation
+    #   3 — return types and assigned property types
+    #   4 — basic dead code: always-false conditions, unreachable code, unused returns
+    #   5 — argument types passed to methods/functions
+    #   6 — missing typehints
+    #   7 — partially wrong union types, unknown methods on union types
+    #   8 — calling methods and accessing properties on nullable types
+    #   9 — strict about the `mixed` type
+
+    level: 7
+
+    paths:
+        - src
+        - timeshit.php
