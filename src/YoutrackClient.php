@@ -16,6 +16,8 @@ use function is_int;
 use function is_string;
 use function json_decode;
 use function rtrim;
+use function strpos;
+use function substr;
 
 use const CURLINFO_HTTP_CODE;
 use const CURLOPT_HTTPHEADER;
@@ -37,8 +39,9 @@ final class YoutrackClient
     public function me(): array
     {
         $raw = $this->get('/api/users/me', ['fields' => 'login,fullName,email']);
+        $login = self::asString($raw['login'] ?? null) ?? '';
         return [
-            'login' => self::asString($raw['login'] ?? null) ?? '',
+            'login' => self::dropDomain($login),
             'fullName' => self::asString($raw['fullName'] ?? null) ?? '',
             'email' => self::asString($raw['email'] ?? null) ?? '',
         ];
@@ -136,7 +139,7 @@ final class YoutrackClient
             type: self::cfName($issue, 'Type') ?? '-',
             category: self::cfName($issue, 'Category') ?? '-',
             assignee: self::cfUser($issue, 'Assignee') ?? '-',
-            spent: self::cfPeriod($issue, 'Spent time') ?? '-',
+            spent: self::cfMinutes($issue, 'Spent time') ?? 0,
         );
     }
 
@@ -181,25 +184,28 @@ final class YoutrackClient
         if (!is_array($value)) {
             return null;
         }
-        return self::asString($value['login'] ?? null)
+        $name = self::asString($value['login'] ?? null)
             ?? self::asString($value['fullName'] ?? null);
+        return $name === null ? null : self::dropDomain($name);
+    }
+
+    private static function dropDomain(string $name): string
+    {
+        $at = strpos($name, '@');
+        return $at === false ? $name : substr($name, 0, $at);
     }
 
     /**
      * @param array<int|string, mixed> $issue
      */
-    private static function cfPeriod(array $issue, string $field): ?string
+    private static function cfMinutes(array $issue, string $field): ?int
     {
         $value = self::customFieldValue($issue, $field);
         if (!is_array($value)) {
             return null;
         }
-        $presentation = self::asString($value['presentation'] ?? null);
-        if ($presentation !== null) {
-            return $presentation;
-        }
         $minutes = $value['minutes'] ?? null;
-        return is_int($minutes) ? $minutes . 'm' : null;
+        return is_int($minutes) ? $minutes : null;
     }
 
     private static function asString(mixed $value): ?string

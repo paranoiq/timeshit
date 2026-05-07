@@ -35,11 +35,15 @@ A simple time tracker for personal use, integrated with YouTrack, GitLab, and Gi
 timeshit.php            CLI entry point — dispatcher: `php timeshit.php <command>`
 config.ini              committed — non-secret config (e.g. youtrack_base_url=...)
 src/                    flat — single namespace level under `Timeshit`, no subdirs
+  Ansi.php              ANSI 16-color helpers (red(), lred(), ...)
   Config.php            loads ./config.ini + secrets/youtrack-token.txt
+  IssueCache.php        on-disk JSON cache for issue lists, mtime-based TTL
   YoutrackClient.php    cURL-based YouTrack REST client (parses JSON into value objects)
   YoutrackIssue.php     immutable value object representing a single YouTrack issue
 secrets/                gitignored — tokens / credentials live here
   youtrack-token.txt    YouTrack permanent token (Bearer)
+data/                   gitignored — runtime cache
+  issues.json           cached issue list (refreshed automatically every 24h)
 composer.json           dev deps: phpstan, phpstan-strict-rules; PSR-4 Timeshit\ → src/
 phpstan.neon            level 7 + strict rules, paths: src/ + timeshit.php
 ```
@@ -49,7 +53,8 @@ phpstan.neon            level 7 + strict rules, paths: src/ + timeshit.php
 Single dispatcher script `timeshit.php` at the project root. Subcommands as positional argument:
 
 - `php timeshit.php` — usage
-- `php timeshit.php issues` — list YouTrack issues the current user is assigned to / reported / commented on / last updated
+- `php timeshit.php issues` — list YouTrack issues; uses cached `data/issues.json` if it is less than 24h old, otherwise fetches and re-caches
+- `php timeshit.php refresh` — force-refresh the cache from YouTrack and list
 
 Future commands (start, end, branch-switch tracking, etc.) follow the same `timeshit.php <command>` pattern.
 
@@ -77,7 +82,7 @@ Type-narrowing rules learned the hard way:
 
 ## Status
 
-- YouTrack: read-only — list issues the current user is assigned to / reported / commented on / last updated. Run with `php timeshit.php issues`.
+- YouTrack: read-only — list issues the current user is assigned to / reported / commented on / last updated, with 24h JSON cache at `data/issues.json`. Run with `php timeshit.php issues` (cached) or `php timeshit.php refresh` (force).
 - Local server: not started.
 - CLI (start/end/branch-switch tracking): not started.
 - GitLab integration: not started.
