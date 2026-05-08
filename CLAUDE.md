@@ -38,12 +38,15 @@ src/                    flat — single namespace level under `Timeshit`, no sub
   Ansi.php              ANSI 16-color helpers (red(), lred(), ...)
   Config.php            loads ./config.ini + secrets/youtrack-token.txt
   IssueCache.php        on-disk JSON cache for issue lists, mtime-based TTL
+  WorkItemCache.php     on-disk JSON cache for work items, mtime-based TTL
   YoutrackClient.php    cURL-based YouTrack REST client (parses JSON into value objects)
   YoutrackIssue.php     immutable value object representing a single YouTrack issue
+  WorkItem.php          immutable value object representing a single time-tracking entry
 secrets/                gitignored — tokens / credentials live here
   youtrack-token.txt    YouTrack permanent token (Bearer)
 data/                   gitignored — runtime cache
-  issues.json           cached issue list (refreshed automatically every 24h)
+  issues.json           cached issue list with per-issue role tags (refreshed every 24h)
+  work-items.json       cached time-tracking entries authored by the current user
 composer.json           dev deps: phpstan, phpstan-strict-rules; PSR-4 Timeshit\ → src/
 phpstan.neon            level 7 + strict rules, paths: src/ + timeshit.php
 ```
@@ -79,10 +82,11 @@ Type-narrowing rules learned the hard way:
 - HTTP client wraps cURL; no Guzzle/Composer for now. Same interface can later be swapped for Guzzle if needed.
 - "Current user" in YouTrack queries is implicit via the token — we use `me` keyword (e.g. `assignee: me, commenter: me, ...`).
 - YouTrack custom field shapes vary (User / Enum / Period / ...). The client returns raw decoded issues; callers extract via `Client::customFieldValue($issue, $name)` and interpret the shape themselves. Field names assumed: `State`, `Type`, `Assignee`, `Category`, `Spent time` — adjust if a project uses different names.
+- To know *why* an issue was downloaded, the client runs one query per role (`assignee: me`, `commenter: me`, `reporter: me`, `updater: me`) plus a `/api/workItems?author=me` call, and merges results by issue ID. Each `YoutrackIssue` carries a `roles: list<string>` with the matching subset of `assignee` / `commenter` / `reporter` / `updater` / `workAuthor`.
 
 ## Status
 
-- YouTrack: read-only — list issues the current user is assigned to / reported / commented on / last updated, with 24h JSON cache at `data/issues.json`. Run with `php timeshit.php issues` (cached) or `php timeshit.php refresh` (force).
+- YouTrack: read-only — list issues the current user is assigned to / reported / commented on / last updated / has logged work on, with per-issue role tags. Also pulls all work items the current user authored. 24h JSON caches at `data/issues.json` and `data/work-items.json`. Run with `php timeshit.php issues` (cached) or `php timeshit.php refresh` (force both caches).
 - Local server: not started.
 - CLI (start/end/branch-switch tracking): not started.
 - GitLab integration: not started.

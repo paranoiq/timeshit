@@ -2,17 +2,22 @@
 
 require __DIR__ . '/src/Ansi.php';
 require __DIR__ . '/src/Config.php';
-require __DIR__ . '/src/YoutrackIssue.php';
+require __DIR__ . '/src/Issue.php';
+require __DIR__ . '/src/WorkItem.php';
 require __DIR__ . '/src/IssueCache.php';
+require __DIR__ . '/src/WorkItemCache.php';
 require __DIR__ . '/src/YoutrackClient.php';
 
 use Timeshit\Ansi;
 use Timeshit\Config;
 use Timeshit\IssueCache;
+use Timeshit\WorkItem;
+use Timeshit\WorkItemCache;
 use Timeshit\YoutrackClient;
-use Timeshit\YoutrackIssue;
+use Timeshit\Issue;
 
-const CACHE_PATH = __DIR__ . '/data/issues.json';
+const ISSUES_CACHE_PATH = __DIR__ . '/data/issues.json';
+const WORK_ITEMS_CACHE_PATH = __DIR__ . '/data/work-items.json';
 
 $command = $argv[1] ?? null;
 
@@ -37,25 +42,39 @@ try {
 
 function cmdIssues(Config $config): void
 {
-    $cache = new IssueCache(CACHE_PATH);
-    if ($cache->isFresh()) {
-        $data = $cache->load();
-        fprintf(STDERR, "Loaded %d issues from cache (use 'refresh' to force update)\n\n", count($data['issues']));
+    $issueCache = new IssueCache(ISSUES_CACHE_PATH);
+    $workItemCache = new WorkItemCache(WORK_ITEMS_CACHE_PATH);
+    if ($issueCache->isFresh() && $workItemCache->isFresh()) {
+        $issuesData = $issueCache->load();
+        $workItemsData = $workItemCache->load();
+        fprintf(
+            STDERR,
+            "Loaded %d issues and %d work items from cache (use 'refresh' to force update)\n\n",
+            count($issuesData['issues']),
+            count($workItemsData['items']),
+        );
     } else {
-        $data = fetchAndCacheIssues($config, $cache);
+        $fresh = fetchAndCache($config, $issueCache, $workItemCache);
+        $issuesData = $fresh['issues'];
     }
-    printIssues($data['issues'], $data['user']);
+    printIssues($issuesData['issues'], $issuesData['user']);
 }
 
 function cmdRefresh(Config $config): void
 {
-    $cache = new IssueCache(CACHE_PATH);
-    $data = fetchAndCacheIssues($config, $cache);
-    printIssues($data['issues'], $data['user']);
+    $issueCache = new IssueCache(ISSUES_CACHE_PATH);
+    $workItemCache = new WorkItemCache(WORK_ITEMS_CACHE_PATH);
+    $fresh = fetchAndCache($config, $issueCache, $workItemCache);
+    printIssues($fresh['issues']['issues'], $fresh['issues']['user']);
 }
 
-/** @return array{user: string, issues: list<YoutrackIssue>} */
-function fetchAndCacheIssues(Config $config, IssueCache $cache): array
+/**
+ * @return array{
+ *     issues: array{user: string, issues: list<Issue>},
+ *     workItems: array{user: string, items: list<WorkItem>},
+ * }
+ */
+function fetchAndCache(Config $config, IssueCache $issueCache, WorkItemCache $workItemCache): array
 {
     $client = new YoutrackClient($config->youtrackBaseUrl, $config->youtrackToken);
 
@@ -68,41 +87,60 @@ function fetchAndCacheIssues(Config $config, IssueCache $cache): array
         $me['login'],
     );
 
-    $issues = $client->myIssues();
-    $cache->save($me['login'], $issues);
-    fprintf(STDERR, "Cached %d issues\n", count($issues));
-    return ['user' => $me['login'], 'issues' => $issues];
+    $data = $client->fetchMine();
+    $issueCache->save($me['login'], $data['issues']);
+    $workItemCache->save($me['login'], $data['workItems']);
+    fprintf(
+        STDERR,
+        "Cached %d issues and %d work items\n",
+        count($data['issues']),
+        count($data['workItems']),
+    );
+
+    return [
+        'issues' => ['user' => $me['login'], 'issues' => $data['issues']],
+        'workItems' => ['user' => $me['login'], 'items' => $data['workItems']],
+    ];
 }
 
-/** @param list<YoutrackIssue> $issues */
+/** @param list<Issue> $issues */
 function printIssues(array $issues, string $currentUser): void
 {
     usort(
         $issues,
-        static fn(YoutrackIssue $a, YoutrackIssue $b): int => statePriority($a->state) <=> statePriority($b->state),
+        static fn(Issue $a, Issue $b): int => statePriority($a->state) <=> statePriority($b->state),
     );
 
-    $format = "%-10s %-8s %-18s %-10s %-20s %-20s %-10s %s\n";
-    printf($format, 'ID', 'PROJECT', 'STATE', 'TYPE', 'CATEGORY', 'ASSIGNEE', '  SPENT', 'TITLE');
+    echo 'ROLES: a' . Ansi::lblack('=assignee')
+        . '  c' . Ansi::lblack('=commenter')
+        . '  r' . Ansi::lblack('=reporter')
+        . '  u' . Ansi::lblack('=updater')
+        . '  w' . Ansi::lblack('=work author')
+        . "\n\n";
+
+    $format = "%-10s %-10s %-8s %-18s %-6s %-20s %-11s %s\n";
+    printf($format, 'ID', /*'PROJECT',*/'TYPE', 'CATEGORY', 'STATE', 'ROLES', 'ASSIGNEE', '   SPENT', 'TITLE');
     printf(
         $format,
         str_repeat('-', 10),
+        //str_repeat('-', 8),
+        str_repeat('-', 10),
         str_repeat('-', 8),
         str_repeat('-', 18),
-        str_repeat('-', 10),
+        str_repeat('-', 6),
         str_repeat('-', 20),
-        str_repeat('-', 20),
-        str_repeat('-', 10),
+        str_repeat('-', 11),
         str_repeat('-', 50),
     );
     foreach ($issues as $issue) {
         printf(
             $format,
             $issue->id,
-            $issue->project,
-            colorizeState($issue->state),
+            //$issue->project,
             $issue->type,
-            $issue->category,
+            formatCategory($issue->category),
+            colorizeState($issue->state),
+            formatRoles($issue->roles),
             colorizeAssignee($issue->assignee, $currentUser),
             formatSpent($issue->spent),
             $issue->title,
@@ -110,24 +148,56 @@ function printIssues(array $issues, string $currentUser): void
     }
 }
 
+function formatCategory(string $category): string
+{
+    $shorts = [
+        'Admin / Overhead / Support' => 'Admin',
+        'Generic new feature' => 'Feature',
+        'Internal tooling' => 'Tooling',
+        'Technical debt' => 'Debt',
+    ];
+
+    return str_replace(array_keys($shorts), array_values($shorts), $category);
+}
+
+/** @param list<string> $roles */
+function formatRoles(array $roles): string
+{
+    $order = [
+        'assignee' => 'a',
+        'commenter' => 'c',
+        'reporter' => 'r',
+        'updater' => 'u',
+        'workAuthor' => 'w',
+    ];
+    $mask = '';
+    foreach ($order as $role => $letter) {
+        $mask .= in_array($role, $roles, true) ? $letter : Ansi::lblack('-');
+    }
+
+    return $mask . ' ';
+}
+
 function formatSpent(int $totalMinutes): string
 {
     if ($totalMinutes === 0) {
-        return sprintf('%10s', '-');
+        return sprintf('%11s', '-');
     }
     $minutes = $totalMinutes % 60;
     $totalHours = intdiv($totalMinutes, 60);
     $hours = $totalHours % 8;
     $days = intdiv($totalHours, 8);
-    $daysPart = $days > 0 ? sprintf('%2d', $days) . Ansi::lblack('d') : '   ';
+    $daysPart = $days > 0 ? sprintf('%3d', $days) . Ansi::lblack('d') : '    ';
     $hoursPart = $hours > 0 ? sprintf('%d', $hours) . Ansi::lblack('h') : '  ';
     $minutesPart = $minutes > 0 ? sprintf('%2d', $minutes) . Ansi::lblack('m') : '   ';
+
     return $daysPart . ' ' . $hoursPart . ' ' . $minutesPart;
 }
 
 function colorizeAssignee(string $assignee, string $currentUser): string
 {
     $padded = sprintf('%-20s', $assignee);
+
     return $assignee === $currentUser ? Ansi::lgreen($padded) : $padded;
 }
 
@@ -147,6 +217,7 @@ function statePriority(string $state): int
 function colorizeState(string $state): string
 {
     $padded = sprintf('%-18s', $state);
+
     return match (true) {
         $state === 'Blocked' => Ansi::red($padded),
         $state === 'In Progress' => Ansi::yellow($padded),

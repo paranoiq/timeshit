@@ -11,6 +11,7 @@ use function curl_getinfo;
 use function curl_init;
 use function curl_setopt_array;
 use function http_build_query;
+use function in_array;
 use function is_array;
 use function is_int;
 use function is_string;
@@ -40,6 +41,7 @@ final class YoutrackClient
     {
         $raw = $this->get('/api/users/me', ['fields' => 'login,fullName,email']);
         $login = self::asString($raw['login'] ?? null) ?? '';
+
         return [
             'login' => self::dropDomain($login),
             'fullName' => self::asString($raw['fullName'] ?? null) ?? '',
@@ -48,32 +50,85 @@ final class YoutrackClient
     }
 
     /**
-     * Issues the current user (per token) is involved in:
-     * assigned, reported, commented on, or last updated by them.
+     * Fetches all issues the current user is involved in (one query per role
+     * so we know *why* each was downloaded), plus all work items they authored.
+     * Each issue carries a `roles` list naming which queries matched it.
      *
-     * @return list<YoutrackIssue>
+     * @return array{issues: list<Issue>, workItems: list<WorkItem>}
      */
-    public function myIssues(int $top = 100): array
+    public function fetchMine(int $top = 1000): array
     {
-        $query = 'assignee: me or commenter: me or reporter: me or updater: me';
-        $fields = 'idReadable,summary,'
+        $issueFields = 'idReadable,summary,'
             . 'project(shortName,name),'
             . 'customFields(name,value(name,login,fullName,minutes,presentation))';
 
-        $raw = $this->get('/api/issues', [
-            'query' => $query,
-            'fields' => $fields,
+        $roleQueries = [
+            'assignee' => 'assignee: me',
+            'commenter' => 'commenter: me',
+            'reporter' => 'reporter: me',
+            'updater' => 'updater: me',
+        ];
+
+        /** @var array<string, array{data: array<int|string, mixed>, roles: list<string>}> $byId */
+        $byId = [];
+        foreach ($roleQueries as $role => $query) {
+            $raw = $this->get('/api/issues', [
+                'query' => $query,
+                'fields' => $issueFields,
+                '$top' => $top,
+            ]);
+            foreach ($raw as $issue) {
+                if (!is_array($issue)) {
+                    continue;
+                }
+                $id = self::asString($issue['idReadable'] ?? null);
+                if ($id === null) {
+                    continue;
+                }
+                if (!isset($byId[$id])) {
+                    $byId[$id] = ['data' => $issue, 'roles' => []];
+                }
+                $byId[$id]['roles'][] = $role;
+            }
+        }
+
+        $workItemsRaw = $this->get('/api/workItems', [
+            'author' => 'me',
+            'fields' => 'id,date,created,duration(minutes),text,type(name),'
+                . 'issue(' . $issueFields . ')',
             '$top' => $top,
         ]);
 
-        $result = [];
-        foreach ($raw as $issue) {
-            if (!is_array($issue)) {
+        $workItems = [];
+        foreach ($workItemsRaw as $rawItem) {
+            if (!is_array($rawItem)) {
                 continue;
             }
-            $result[] = self::parseIssue($issue);
+            $issueRaw = $rawItem['issue'] ?? null;
+            if (!is_array($issueRaw)) {
+                continue;
+            }
+            $issueId = self::asString($issueRaw['idReadable'] ?? null);
+            if ($issueId === null) {
+                continue;
+            }
+
+            $workItems[] = self::parseWorkItem($rawItem, $issueId);
+
+            if (!isset($byId[$issueId])) {
+                $byId[$issueId] = ['data' => $issueRaw, 'roles' => []];
+            }
+            if (!in_array('workAuthor', $byId[$issueId]['roles'], true)) {
+                $byId[$issueId]['roles'][] = 'workAuthor';
+            }
         }
-        return $result;
+
+        $issues = [];
+        foreach ($byId as $entry) {
+            $issues[] = self::parseIssue($entry['data'], $entry['roles']);
+        }
+
+        return ['issues' => $issues, 'workItems' => $workItems];
     }
 
     /**
@@ -112,13 +167,15 @@ final class YoutrackClient
         if (!is_array($decoded)) {
             throw new RuntimeException("YouTrack $path returned invalid JSON");
         }
+
         return $decoded;
     }
 
     /**
      * @param array<int|string, mixed> $issue
+     * @param list<string> $roles
      */
-    private static function parseIssue(array $issue): YoutrackIssue
+    private static function parseIssue(array $issue, array $roles): Issue
     {
         $id = self::asString($issue['idReadable'] ?? null) ?? '?';
         $title = self::asString($issue['summary'] ?? null) ?? '';
@@ -131,7 +188,7 @@ final class YoutrackClient
                 ?? '?';
         }
 
-        return new YoutrackIssue(
+        return new Issue(
             id: $id,
             title: $title,
             project: $project,
@@ -140,6 +197,39 @@ final class YoutrackClient
             category: self::cfName($issue, 'Category') ?? '-',
             assignee: self::cfUser($issue, 'Assignee') ?? '-',
             spent: self::cfMinutes($issue, 'Spent time') ?? 0,
+            roles: $roles,
+        );
+    }
+
+    /**
+     * @param array<int|string, mixed> $raw
+     */
+    private static function parseWorkItem(array $raw, string $issueId): WorkItem
+    {
+        $id = self::asString($raw['id'] ?? null) ?? '?';
+        $date = self::asInt($raw['date'] ?? null) ?? self::asInt($raw['created'] ?? null) ?? 0;
+
+        $minutes = 0;
+        $duration = $raw['duration'] ?? null;
+        if (is_array($duration)) {
+            $minutes = self::asInt($duration['minutes'] ?? null) ?? 0;
+        }
+
+        $type = '-';
+        $typeRaw = $raw['type'] ?? null;
+        if (is_array($typeRaw)) {
+            $type = self::asString($typeRaw['name'] ?? null) ?? '-';
+        }
+
+        $text = self::asString($raw['text'] ?? null) ?? '';
+
+        return new WorkItem(
+            id: $id,
+            issueId: $issueId,
+            date: $date,
+            minutes: $minutes,
+            type: $type,
+            text: $text,
         );
     }
 
@@ -160,6 +250,7 @@ final class YoutrackClient
                 return $field['value'] ?? null;
             }
         }
+
         return null;
     }
 
@@ -172,6 +263,7 @@ final class YoutrackClient
         if (!is_array($value)) {
             return null;
         }
+
         return self::asString($value['name'] ?? null);
     }
 
@@ -186,12 +278,14 @@ final class YoutrackClient
         }
         $name = self::asString($value['login'] ?? null)
             ?? self::asString($value['fullName'] ?? null);
+
         return $name === null ? null : self::dropDomain($name);
     }
 
     private static function dropDomain(string $name): string
     {
         $at = strpos($name, '@');
+
         return $at === false ? $name : substr($name, 0, $at);
     }
 
@@ -205,11 +299,17 @@ final class YoutrackClient
             return null;
         }
         $minutes = $value['minutes'] ?? null;
+
         return is_int($minutes) ? $minutes : null;
     }
 
     private static function asString(mixed $value): ?string
     {
         return is_string($value) ? $value : null;
+    }
+
+    private static function asInt(mixed $value): ?int
+    {
+        return is_int($value) ? $value : null;
     }
 }

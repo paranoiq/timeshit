@@ -20,7 +20,7 @@ use function time;
 use const JSON_PRETTY_PRINT;
 use const JSON_THROW_ON_ERROR;
 
-final class IssueCache
+final class WorkItemCache
 {
     private const TTL_SECONDS = 86400;
 
@@ -39,7 +39,7 @@ final class IssueCache
         return $mtime + self::TTL_SECONDS > time();
     }
 
-    /** @return array{user: string, issues: list<Issue>} */
+    /** @return array{user: string, items: list<WorkItem>} */
     public function load(): array
     {
         $raw = file_get_contents($this->path);
@@ -54,29 +54,29 @@ final class IssueCache
         if (!is_string($user)) {
             throw new RuntimeException("Cache missing 'user' field: {$this->path} (run 'refresh')");
         }
-        $issuesRaw = $decoded['issues'] ?? null;
-        if (!is_array($issuesRaw)) {
-            throw new RuntimeException("Cache missing 'issues' field: {$this->path} (run 'refresh')");
+        $itemsRaw = $decoded['items'] ?? null;
+        if (!is_array($itemsRaw)) {
+            throw new RuntimeException("Cache missing 'items' field: {$this->path} (run 'refresh')");
         }
-        $issues = [];
-        foreach ($issuesRaw as $item) {
+        $items = [];
+        foreach ($itemsRaw as $item) {
             if (!is_array($item)) {
                 continue;
             }
-            $issues[] = Issue::fromArray($item);
+            $items[] = WorkItem::fromArray($item);
         }
 
-        return ['user' => $user, 'issues' => $issues];
+        return ['user' => $user, 'items' => $items];
     }
 
-    /** @param list<Issue> $issues */
-    public function save(string $user, array $issues): void
+    /** @param list<WorkItem> $items */
+    public function save(string $user, array $items): void
     {
         $dir = dirname($this->path);
         if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new RuntimeException("Failed to create cache dir: $dir");
         }
-        $payload = ['user' => $user, 'issues' => $issues];
+        $payload = ['user' => $user, 'items' => $items];
         $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
         if (file_put_contents($this->path, $json) === false) {
             throw new RuntimeException("Failed to write cache: {$this->path}");

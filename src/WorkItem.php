@@ -7,17 +7,15 @@ use RuntimeException;
 use function is_int;
 use function is_string;
 
-final class YoutrackIssue
+final class WorkItem
 {
     public function __construct(
         public readonly string $id,
-        public readonly string $title,
-        public readonly string $project,
-        public readonly string $state,
+        public readonly string $issueId,
+        public readonly int $date,
+        public readonly int $minutes,
         public readonly string $type,
-        public readonly string $category,
-        public readonly string $assignee,
-        public readonly int $spent,
+        public readonly string $text,
     ) {}
 
     /** @param array<int|string, mixed> $data */
@@ -25,13 +23,11 @@ final class YoutrackIssue
     {
         return new self(
             id: self::str($data, 'id'),
-            title: self::str($data, 'title'),
-            project: self::str($data, 'project'),
-            state: self::str($data, 'state'),
+            issueId: self::str($data, 'issueId'),
+            date: self::int($data, 'date'),
+            minutes: self::int($data, 'minutes'),
             type: self::str($data, 'type'),
-            category: self::str($data, 'category'),
-            assignee: self::str($data, 'assignee'),
-            spent: self::int($data, 'spent'),
+            text: self::str($data, 'text'),
         );
     }
 
@@ -40,8 +36,9 @@ final class YoutrackIssue
     {
         $value = $data[$key] ?? null;
         if (!is_string($value)) {
-            throw new RuntimeException("Invalid YoutrackIssue: '$key' missing or not a string");
+            throw new RuntimeException("Invalid WorkItem: '$key' missing or not a string");
         }
+
         return $value;
     }
 
@@ -50,8 +47,9 @@ final class YoutrackIssue
     {
         $value = $data[$key] ?? null;
         if (!is_int($value)) {
-            throw new RuntimeException("Invalid YoutrackIssue: '$key' missing or not an int");
+            throw new RuntimeException("Invalid WorkItem: '$key' missing or not an int");
         }
+
         return $value;
     }
 }
