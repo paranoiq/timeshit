@@ -10,5 +10,5 @@
 branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 
-php ~/dev/php/timeshit/timeshit.php track "$branch" "$repo_root"
+php ~/dev/php/timeshit/timeshit.php checkout "$branch" "$repo_root"
 exit 0

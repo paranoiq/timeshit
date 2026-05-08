@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 
-namespace Timeshit;
+namespace Timeshit\Youtrack;
 
 use RuntimeException;
 
@@ -20,7 +20,7 @@ use function time;
 use const JSON_PRETTY_PRINT;
 use const JSON_THROW_ON_ERROR;
 
-final class WorkItemCache
+final class IssueCache
 {
     private const TTL_SECONDS = 86400;
 
@@ -39,7 +39,7 @@ final class WorkItemCache
         return $mtime + self::TTL_SECONDS > time();
     }
 
-    /** @return array{user: string, items: list<WorkItem>} */
+    /** @return array{user: string, issues: list<Issue>} */
     public function load(): array
     {
         $raw = file_get_contents($this->path);
@@ -54,29 +54,29 @@ final class WorkItemCache
         if (!is_string($user)) {
             throw new RuntimeException("Cache missing 'user' field: {$this->path} (run 'refresh')");
         }
-        $itemsRaw = $decoded['items'] ?? null;
-        if (!is_array($itemsRaw)) {
-            throw new RuntimeException("Cache missing 'items' field: {$this->path} (run 'refresh')");
+        $issuesRaw = $decoded['issues'] ?? null;
+        if (!is_array($issuesRaw)) {
+            throw new RuntimeException("Cache missing 'issues' field: {$this->path} (run 'refresh')");
         }
-        $items = [];
-        foreach ($itemsRaw as $item) {
+        $issues = [];
+        foreach ($issuesRaw as $item) {
             if (!is_array($item)) {
                 continue;
             }
-            $items[] = WorkItem::fromArray($item);
+            $issues[] = Issue::fromArray($item);
         }
 
-        return ['user' => $user, 'items' => $items];
+        return ['user' => $user, 'issues' => $issues];
     }
 
-    /** @param list<WorkItem> $items */
-    public function save(string $user, array $items): void
+    /** @param list<Issue> $issues */
+    public function save(string $user, array $issues): void
     {
         $dir = dirname($this->path);
         if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new RuntimeException("Failed to create cache dir: {$dir}");
         }
-        $payload = ['user' => $user, 'items' => $items];
+        $payload = ['user' => $user, 'issues' => $issues];
         $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
         if (file_put_contents($this->path, $json) === false) {
             throw new RuntimeException("Failed to write cache: {$this->path}");

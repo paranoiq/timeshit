@@ -5,8 +5,10 @@
     "require": {
         "php": ">=8.2",
         "ext-curl": "*",
+        "ext-ffi": "*",
+        "ext-intl": "*",
         "ext-json": "*",
-        "ext-ffi": "*"
+        "ext-mbstring": "*"
     },
     "require-dev": {
         "phpstan/phpstan": "^2.1",

@@ -1,6 +1,11 @@
 <?php declare(strict_types=1);
 
-namespace Timeshit;
+namespace Timeshit\View;
+
+use Timeshit\Ansi;
+use Timeshit\Format;
+use Timeshit\Youtrack\Issue;
+use Timeshit\Youtrack\WorkItem;
 
 use function date;
 use function intdiv;

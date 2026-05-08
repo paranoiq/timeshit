@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 
-namespace Timeshit;
+namespace Timeshit\Local;
 
 use RuntimeException;
 
@@ -18,11 +18,11 @@ use function mkdir;
 use const JSON_PRETTY_PRINT;
 use const JSON_THROW_ON_ERROR;
 
-final class WorkLocalStore
+final class Store
 {
     public function __construct(private readonly string $path) {}
 
-    /** @return list<WorkLocalItem> */
+    /** @return list<Record> */
     public function load(): array
     {
         if (!file_exists($this->path)) {
@@ -45,13 +45,13 @@ final class WorkLocalStore
             if (!is_array($item)) {
                 continue;
             }
-            $items[] = WorkLocalItem::fromArray($item);
+            $items[] = Record::fromArray($item);
         }
 
         return $items;
     }
 
-    /** @param list<WorkLocalItem> $items */
+    /** @param list<Record> $items */
     public function save(array $items): void
     {
         $dir = dirname($this->path);
@@ -70,12 +70,12 @@ final class WorkLocalStore
      * then appends a new open entry. If the open entry already matches the new
      * one (same issueId, branch, repo, type), nothing is written.
      *
-     * @return array{started: bool, stopped: ?WorkLocalItem}
+     * @return array{started: bool, stopped: ?Record}
      *     started: true when a new entry was appended;
      *     stopped: the just-closed previous entry (with endedAt set), or null
      *     when there was no prior open entry or the call was a no-op.
      */
-    public function track(WorkLocalItem $next, string $endTrigger): array
+    public function track(Record $next, string $endTrigger): array
     {
         $items = $this->load();
         $last = array_pop($items);
@@ -103,7 +103,7 @@ final class WorkLocalStore
      * Replaces the type of the latest open entry. No-op when the open entry
      * already has this type.
      *
-     * @return array{changed: bool, previousType: ?string, item: ?WorkLocalItem}
+     * @return array{changed: bool, previousType: ?string, item: ?Record}
      *     changed: true when the file was rewritten;
      *     previousType: the prior type when there was an open entry, else null;
      *     item: the (now updated) open entry, or null when no entry was open.
@@ -137,7 +137,7 @@ final class WorkLocalStore
      * non-empty it is appended to the entry's existing comment using
      * `' | '` as separator.
      *
-     * @return array{ended: bool, item: ?WorkLocalItem}
+     * @return array{ended: bool, item: ?Record}
      *     ended: true when the file was rewritten;
      *     item: the now-closed entry, or null when there was no open entry.
      */
@@ -166,7 +166,7 @@ final class WorkLocalStore
      * by `' | '`. No-op when the merged result is identical to the existing
      * comment (e.g. appending an empty string).
      *
-     * @return array{changed: bool, item: ?WorkLocalItem}
+     * @return array{changed: bool, item: ?Record}
      */
     public function commentOpen(string $comment): array
     {
