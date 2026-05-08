@@ -67,6 +67,8 @@ final class YoutrackClient
             'commenter' => 'commenter: me',
             'reporter' => 'reporter: me',
             'updater' => 'updater: me',
+            'starred' => 'tag: Star',
+            'mentioned' => 'mentions: me',
         ];
 
         /** @var array<string, array{data: array<int|string, mixed>, roles: list<string>}> $byId */
@@ -129,6 +131,31 @@ final class YoutrackClient
         }
 
         return ['issues' => $issues, 'workItems' => $workItems];
+    }
+
+    /**
+     * Fetches the global list of work item types configured in YouTrack
+     * (`/api/admin/timeTrackingSettings/workItemTypes`).
+     *
+     * @return list<WorkItemType>
+     */
+    public function fetchWorkItemTypes(): array
+    {
+        $raw = $this->get('/api/admin/timeTrackingSettings/workItemTypes', ['fields' => 'id,name']);
+        $types = [];
+        foreach ($raw as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $id = self::asString($item['id'] ?? null);
+            $name = self::asString($item['name'] ?? null);
+            if ($id === null || $name === null) {
+                continue;
+            }
+            $types[] = new WorkItemType(id: $id, name: $name);
+        }
+
+        return $types;
     }
 
     /**

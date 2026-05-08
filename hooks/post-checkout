@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Git post-checkout hook for timeshit.
+# Args from git: $1=prev_head $2=new_head $3=branch_flag (1=branch checkout, 0=file checkout).
+# Requires `ts` (timeshit) to be on PATH.
+
+# Only fire on branch checkouts where HEAD actually moved.
+[ "$3" = "1" ] || exit 0
+[ "$1" = "$2" ] && exit 0
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+php ~/dev/php/timeshit/timeshit.php track "$branch" "$repo_root"
+exit 0

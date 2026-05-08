@@ -22,6 +22,11 @@ final class Ansi
     public static function lcyan(string $text): string    { return self::wrap(96, $text); }
     public static function lwhite(string $text): string   { return self::wrap(97, $text); }
 
+    public static function link(string $url, string $text): string
+    {
+        return "\e]8;;{$url}\e\\{$text}\e]8;;\e\\";
+    }
+
     private static function wrap(int $code, string $text): string
     {
         return "\e[{$code}m{$text}\e[0m";

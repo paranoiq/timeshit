@@ -1,0 +1,98 @@
+<?php declare(strict_types=1);
+
+namespace Timeshit;
+
+use function date;
+use function intdiv;
+use function max;
+use function mb_strimwidth;
+use function mb_strwidth;
+use function rtrim;
+use function sprintf;
+use function str_repeat;
+use function usort;
+
+final class WorkView
+{
+    public function __construct(
+        private readonly string $baseUrl,
+    ) {}
+
+    /**
+     * @param list<WorkItem> $workItems
+     * @param list<Issue> $issues
+     */
+    public function render(array $workItems, array $issues): void
+    {
+        if ($workItems === []) {
+            echo "No work items.\n";
+            return;
+        }
+
+        $titleByIssueId = [];
+        foreach ($issues as $issue) {
+            $titleByIssueId[$issue->id] = $issue->title;
+        }
+
+        $baseUrl = rtrim($this->baseUrl, '/');
+        usort($workItems, static fn(WorkItem $a, WorkItem $b): int => $b->date <=> $a->date);
+
+        /** @var array<string, int> $weekTotal */
+        $weekTotal = [];
+        /** @var array<string, int> $dayTotal */
+        $dayTotal = [];
+        $grandTotal = 0;
+        foreach ($workItems as $item) {
+            $seconds = intdiv($item->date, 1000);
+            $weekKey = date('o-\WW', $seconds);
+            $dayKey = date('Y-m-d', $seconds);
+            $weekTotal[$weekKey] = ($weekTotal[$weekKey] ?? 0) + $item->minutes;
+            $dayTotal[$dayKey] = ($dayTotal[$dayKey] ?? 0) + $item->minutes;
+            $grandTotal += $item->minutes;
+        }
+
+        $currentWeek = '';
+        $currentDay = '';
+        foreach ($workItems as $item) {
+            $seconds = intdiv($item->date, 1000);
+            $weekKey = date('o-\WW', $seconds);
+            $dayKey = date('Y-m-d', $seconds);
+
+            if ($weekKey !== $currentWeek) {
+                $weekColor = $weekTotal[$weekKey] >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
+                echo "\n" . $weekColor(sprintf('%-16s', $weekKey)) . '  ' . Format::spent($weekTotal[$weekKey], $weekColor) . "\n";
+                $currentWeek = $weekKey;
+                $currentDay = '';
+            }
+            if ($dayKey !== $currentDay) {
+                $dayLabel = date('l j.n.', $seconds);
+                $isWeekend = (int)date('N', $seconds) >= 6;
+                $dayColor = match (true) {
+                    $isWeekend => Ansi::yellow(...),
+                    $dayTotal[$dayKey] >= 8 * 60 => Ansi::lgreen(...),
+                    default => Ansi::red(...),
+                };
+                echo '  ' . $dayColor(sprintf('%-14s', $dayLabel)) . '  ' . Format::spent($dayTotal[$dayKey], $dayColor) . "\n";
+                $currentDay = $dayKey;
+            }
+
+            $url = $baseUrl . '/issue/' . $item->issueId;
+            $type = Format::type($item->type);
+            $title = self::pad(mb_strimwidth($titleByIssueId[$item->issueId] ?? '', 0, 50, '…'), 50);
+            $text = $item->text === '' ? '' : '  ' . Ansi::lblack($item->text);
+            echo sprintf(
+                "    %s  %s  %s  %s%s\n",
+                Ansi::link($url, sprintf('%-12s', $item->issueId)),
+                Format::spent($item->minutes),
+                $type,
+                $title,
+                $text,
+            );
+        }
+    }
+
+    private static function pad(string $s, int $width): string
+    {
+        return $s . str_repeat(' ', max(0, $width - mb_strwidth($s)));
+    }
+}

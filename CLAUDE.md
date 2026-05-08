@@ -37,16 +37,27 @@ config.ini              committed — non-secret config (e.g. youtrack_base_url=
 src/                    flat — single namespace level under `Timeshit`, no subdirs
   Ansi.php              ANSI 16-color helpers (red(), lred(), ...)
   Config.php            loads ./config.ini + secrets/youtrack-token.txt
+  Format.php            shared display helpers (state/spent/roles/assignee/category)
   IssueCache.php        on-disk JSON cache for issue lists, mtime-based TTL
+  IssuesView.php        renders the issues table for `timeshit.php issues`
   WorkItemCache.php     on-disk JSON cache for work items, mtime-based TTL
+  WorkItemTypeCache.php on-disk JSON cache for the YouTrack work-item-type list, mtime-based TTL
+  WorkLocalStore.php    append-only store for locally-tracked time entries (data/work-local.json)
+  WorkView.php          renders the work-items list with day/week rollups for `timeshit.php work`
   YoutrackClient.php    cURL-based YouTrack REST client (parses JSON into value objects)
-  YoutrackIssue.php     immutable value object representing a single YouTrack issue
+  Issue.php             immutable value object representing a single YouTrack issue
   WorkItem.php          immutable value object representing a single time-tracking entry
+  WorkItemType.php      immutable value object for a YouTrack work-item type (id + name)
+  WorkLocalItem.php     immutable value object for a locally-tracked entry (open or closed)
+hooks/                  committed — git hook templates
+  post-checkout         calls `ts track <branch> <repo>` on every branch checkout
 secrets/                gitignored — tokens / credentials live here
   youtrack-token.txt    YouTrack permanent token (Bearer)
 data/                   gitignored — runtime cache
   issues.json           cached issue list with per-issue role tags (refreshed every 24h)
   work-items.json       cached time-tracking entries authored by the current user
+  work-item-types.json  cached global list of YouTrack work-item types (id + name)
+  work-local.json       locally-tracked time entries; appended to by `track`, not yet synced
 composer.json           dev deps: phpstan, phpstan-strict-rules; PSR-4 Timeshit\ → src/
 phpstan.neon            level 7 + strict rules, paths: src/ + timeshit.php
 ```
@@ -57,9 +68,15 @@ Single dispatcher script `timeshit.php` at the project root. Subcommands as posi
 
 - `php timeshit.php` — usage
 - `php timeshit.php issues` — list YouTrack issues; uses cached `data/issues.json` if it is less than 24h old, otherwise fetches and re-caches
-- `php timeshit.php refresh` — force-refresh the cache from YouTrack and list
+- `php timeshit.php work` — list your work items grouped by ISO week and day with per-day, per-week and grand totals (uses the same cache)
+- `php timeshit.php refresh` — force-refresh the cache from YouTrack and list issues
+- `php timeshit.php track <branch> <repo> [<type>]` — switch local time tracking to `<branch>` in `<repo>` (type defaults to `Implementation`); closes the previous open entry and opens a new one in `data/work-local.json`. No-op when the same branch/repo/type is already open. Issue id is the leading `[A-Za-z]{1,3}-\d+` (uppercased) when the branch matches, otherwise the full branch name.
+- `php timeshit.php type <type>` — change the type of the currently open `work-local.json` entry in place (preserves `startedAt`). Match is case-insensitive against `data/work-item-types.json`; the canonical casing from the cache is written back. Errors when no entry is open or `<type>` is unknown. Auto-fetches the type list from YouTrack (`/api/admin/timeTrackingSettings/workItemTypes`) when the cache is missing or older than 24h.
+- `php timeshit.php switch <type>` — end the currently open entry and append a new one cloned from it (same `issueId`/`branch`/`repo`) with the given `<type>`; both `endTrigger` of the closed segment and `startTrigger` of the new one are recorded as `ts switch`. Same matching/validation rules as `type`. No-op when `<type>` already matches; errors when no entry is open. Use this when you want each typed segment to be its own row (intended for eventual sync to YouTrack as separate work items).
+- `php timeshit.php end [<comment>]` — close the currently open entry, recording `endTrigger=ts end`. When `<comment>` is provided it is appended to the entry's existing comment with ` | ` as separator. Errors when no entry is open.
+- `php timeshit.php comment <text>` — append `<text>` to the currently open entry's `comment` with ` | ` as separator. No-op when the result would be unchanged (e.g. empty append); errors when no entry is open.
 
-Future commands (start, end, branch-switch tracking, etc.) follow the same `timeshit.php <command>` pattern.
+Future commands (start, end, etc.) follow the same `timeshit.php <command>` pattern.
 
 CLI entry-point scripts live at the project root (no `bin/` directory). PHP 8.2+ (per composer.json). Composer is dev-tooling only — runtime entry scripts use explicit `require` for the few `src/` files they need; they do not load `vendor/autoload.php`.
 
@@ -82,12 +99,24 @@ Type-narrowing rules learned the hard way:
 - HTTP client wraps cURL; no Guzzle/Composer for now. Same interface can later be swapped for Guzzle if needed.
 - "Current user" in YouTrack queries is implicit via the token — we use `me` keyword (e.g. `assignee: me, commenter: me, ...`).
 - YouTrack custom field shapes vary (User / Enum / Period / ...). The client returns raw decoded issues; callers extract via `Client::customFieldValue($issue, $name)` and interpret the shape themselves. Field names assumed: `State`, `Type`, `Assignee`, `Category`, `Spent time` — adjust if a project uses different names.
-- To know *why* an issue was downloaded, the client runs one query per role (`assignee: me`, `commenter: me`, `reporter: me`, `updater: me`) plus a `/api/workItems?author=me` call, and merges results by issue ID. Each `YoutrackIssue` carries a `roles: list<string>` with the matching subset of `assignee` / `commenter` / `reporter` / `updater` / `workAuthor`.
+- To know *why* an issue was downloaded, the client runs one query per role (`assignee: me`, `commenter: me`, `reporter: me`, `updater: me`, `tag: Star`, `mentions: me`) plus a `/api/workItems?author=me` call, and merges results by issue ID. Each `YoutrackIssue` carries a `roles: list<string>` with the matching subset of `assignee` / `commenter` / `reporter` / `updater` / `workAuthor` / `starred` / `mentioned`.
+
+## Local tracking
+
+`data/work-local.json` holds an append-only list of tracking entries. Each entry records `issueId`, `branch`, `repo`, `type`, `startedAt` / `startTrigger` and (once closed) `endedAt` / `endTrigger`. Timestamps are ISO 8601 strings (`date('c')`). The latest entry is the only one allowed to be open (`endedAt: null`). The `track` subcommand closes that open entry and opens a new one in a single write; concurrent shells therefore race, but in practice branch checkouts are serial. Not yet synced to YouTrack.
+
+To install the post-checkout hook in another repo:
+
+```
+ln -s /home/vlasta/dev/php/timeshit/hooks/post-checkout <repo>/.git/hooks/post-checkout
+```
+
+Or set globally for all repos: `git config --global core.hooksPath /home/vlasta/dev/php/timeshit/hooks`. The hook expects `ts` on `PATH` (a script, not a shell alias — git hooks run non-interactively and do not source rc files).
 
 ## Status
 
-- YouTrack: read-only — list issues the current user is assigned to / reported / commented on / last updated / has logged work on, with per-issue role tags. Also pulls all work items the current user authored. 24h JSON caches at `data/issues.json` and `data/work-items.json`. Run with `php timeshit.php issues` (cached) or `php timeshit.php refresh` (force both caches).
+- YouTrack: read-only — list issues the current user is assigned to / reported / commented on / last updated / has logged work on / starred / mentioned in, with per-issue role tags. Also pulls all work items the current user authored, and the global work-item-type list. 24h JSON caches at `data/issues.json`, `data/work-items.json`, and `data/work-item-types.json`. Run with `php timeshit.php issues` (cached), `php timeshit.php work` (work items by week/day), or `php timeshit.php refresh` (force-refresh issues, work items, and types).
 - Local server: not started.
-- CLI (start/end/branch-switch tracking): not started.
+- CLI: branch-switch tracking via `track` + `hooks/post-checkout` writes to `data/work-local.json`. `start` / `end` not started. Sync to YouTrack not started.
 - GitLab integration: not started.
 - Browser plugin / favelet: not started.
