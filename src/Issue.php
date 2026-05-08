@@ -47,12 +47,12 @@ final class Issue
     {
         $value = $data[$key] ?? null;
         if (!is_array($value)) {
-            throw new RuntimeException("Invalid YoutrackIssue: '$key' missing or not an array");
+            throw new RuntimeException("Invalid YoutrackIssue: '{$key}' missing or not an array");
         }
         $result = [];
         foreach ($value as $item) {
             if (!is_string($item)) {
-                throw new RuntimeException("Invalid YoutrackIssue: '$key' contains non-string");
+                throw new RuntimeException("Invalid YoutrackIssue: '{$key}' contains non-string");
             }
             $result[] = $item;
         }
@@ -65,7 +65,7 @@ final class Issue
     {
         $value = $data[$key] ?? null;
         if (!is_string($value)) {
-            throw new RuntimeException("Invalid YoutrackIssue: '$key' missing or not a string");
+            throw new RuntimeException("Invalid YoutrackIssue: '{$key}' missing or not a string");
         }
 
         return $value;
@@ -76,7 +76,7 @@ final class Issue
     {
         $value = $data[$key] ?? null;
         if (!is_int($value)) {
-            throw new RuntimeException("Invalid YoutrackIssue: '$key' missing or not an int");
+            throw new RuntimeException("Invalid YoutrackIssue: '{$key}' missing or not an int");
         }
 
         return $value;

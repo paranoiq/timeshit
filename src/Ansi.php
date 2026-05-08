@@ -2,6 +2,9 @@
 
 namespace Timeshit;
 
+use function preg_replace;
+use function strlen;
+
 final class Ansi
 {
     public static function black(string $text): string    { return self::wrap(30, $text); }
@@ -25,6 +28,11 @@ final class Ansi
     public static function link(string $url, string $text): string
     {
         return "\e]8;;{$url}\e\\{$text}\e]8;;\e\\";
+    }
+
+    public static function length(string $text): int
+    {
+        return strlen((string) preg_replace('/\e\[[0-9;]*m/', '', $text));
     }
 
     private static function wrap(int $code, string $text): string

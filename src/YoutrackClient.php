@@ -168,7 +168,7 @@ final class YoutrackClient
 
         $ch = curl_init($url);
         if ($ch === false) {
-            throw new RuntimeException("curl_init failed for $url");
+            throw new RuntimeException("curl_init failed for {$url}");
         }
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -187,12 +187,12 @@ final class YoutrackClient
             throw new RuntimeException("YouTrack request failed: " . ($err !== '' ? $err : 'empty response'));
         }
         if ($code < 200 || $code >= 300) {
-            throw new RuntimeException("YouTrack $path returned HTTP $code: $body");
+            throw new RuntimeException("YouTrack {$path} returned HTTP {$code}: {$body}");
         }
 
         $decoded = json_decode($body, true);
         if (!is_array($decoded)) {
-            throw new RuntimeException("YouTrack $path returned invalid JSON");
+            throw new RuntimeException("YouTrack {$path} returned invalid JSON");
         }
 
         return $decoded;

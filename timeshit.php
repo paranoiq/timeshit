@@ -61,7 +61,7 @@ try {
 
 function unknownCommand(string $command): never
 {
-    fwrite(STDERR, Ansi::red("Unknown command: $command") . "\n\n");
+    fwrite(STDERR, Ansi::red("Unknown command: {$command}") . "\n\n");
     printHelp();
     exit(1);
 }
@@ -88,23 +88,18 @@ function printHelp(): void
     $nameWidth = 0;
     $argsWidth = 0;
     foreach ($rows as [$name, $args]) {
-        $nameWidth = max($nameWidth, ansiWidth($name));
-        $argsWidth = max($argsWidth, ansiWidth($args));
+        $nameWidth = max($nameWidth, Ansi::length($name));
+        $argsWidth = max($argsWidth, Ansi::length($args));
     }
 
     echo Ansi::lwhite('timeshit') . ' ' . Ansi::lblack('— personal time tracker for YouTrack + GitLab') . "\n\n";
     echo "Usage: " . $cmd('timeshit.php') . " " . $req('command') . " " . $opt('args') . "\n\n";
     echo "Commands:\n";
     foreach ($rows as [$name, $args, $desc]) {
-        echo "  " . $name . str_repeat(' ', $nameWidth - ansiWidth($name) + 2)
-            . $args . str_repeat(' ', $argsWidth - ansiWidth($args) + 2)
+        echo "  " . $name . str_repeat(' ', $nameWidth - Ansi::length($name) + 2)
+            . $args . str_repeat(' ', $argsWidth - Ansi::length($args) + 2)
             . $desc . "\n";
     }
-}
-
-function ansiWidth(string $s): int
-{
-    return strlen((string)preg_replace('/\e\[[0-9;]*m/', '', $s));
 }
 
 function cmdIssues(Config $config): void
@@ -138,7 +133,7 @@ function cmdType(?string $newType): void
         foreach ($types as $t) {
             $names[] = $t->name;
         }
-        throw new RuntimeException("type: unknown type '$newType'. Known: " . implode(', ', $names));
+        throw new RuntimeException("type: unknown type '{$newType}'. Known: " . implode(', ', $names));
     }
     $result = (new WorkLocalStore(WORK_LOCAL_PATH))->changeOpenType($matched);
     $item = $result['item'];
@@ -169,7 +164,7 @@ function cmdSwitch(?string $newType): void
         foreach ($types as $t) {
             $names[] = $t->name;
         }
-        throw new RuntimeException("switch: unknown type '$newType'. Known: " . implode(', ', $names));
+        throw new RuntimeException("switch: unknown type '{$newType}'. Known: " . implode(', ', $names));
     }
     $store = new WorkLocalStore(WORK_LOCAL_PATH);
     $items = $store->load();

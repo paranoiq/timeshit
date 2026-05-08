@@ -74,7 +74,7 @@ final class IssueCache
     {
         $dir = dirname($this->path);
         if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
-            throw new RuntimeException("Failed to create cache dir: $dir");
+            throw new RuntimeException("Failed to create cache dir: {$dir}");
         }
         $payload = ['user' => $user, 'issues' => $issues];
         $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);

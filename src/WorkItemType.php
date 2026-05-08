@@ -27,7 +27,7 @@ final class WorkItemType
     {
         $value = $data[$key] ?? null;
         if (!is_string($value)) {
-            throw new RuntimeException("Invalid WorkItemType: '$key' missing or not a string");
+            throw new RuntimeException("Invalid WorkItemType: '{$key}' missing or not a string");
         }
 
         return $value;

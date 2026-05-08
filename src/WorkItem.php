@@ -36,7 +36,7 @@ final class WorkItem
     {
         $value = $data[$key] ?? null;
         if (!is_string($value)) {
-            throw new RuntimeException("Invalid WorkItem: '$key' missing or not a string");
+            throw new RuntimeException("Invalid WorkItem: '{$key}' missing or not a string");
         }
 
         return $value;
@@ -47,7 +47,7 @@ final class WorkItem
     {
         $value = $data[$key] ?? null;
         if (!is_int($value)) {
-            throw new RuntimeException("Invalid WorkItem: '$key' missing or not an int");
+            throw new RuntimeException("Invalid WorkItem: '{$key}' missing or not an int");
         }
 
         return $value;

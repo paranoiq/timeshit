@@ -92,7 +92,7 @@ final class WorkLocalItem
     {
         $value = $data[$key] ?? null;
         if (!is_string($value)) {
-            throw new RuntimeException("Invalid WorkLocalItem: '$key' missing or not a string");
+            throw new RuntimeException("Invalid WorkLocalItem: '{$key}' missing or not a string");
         }
 
         return $value;
@@ -109,7 +109,7 @@ final class WorkLocalItem
             return null;
         }
         if (!is_string($value)) {
-            throw new RuntimeException("Invalid WorkLocalItem: '$key' is not a string or null");
+            throw new RuntimeException("Invalid WorkLocalItem: '{$key}' is not a string or null");
         }
 
         return $value;
