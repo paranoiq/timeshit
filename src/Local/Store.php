@@ -7,6 +7,8 @@ use RuntimeException;
 
 use function array_map;
 use function array_pop;
+use function array_values;
+use function count;
 use function date;
 use function dirname;
 use function file_exists;
@@ -185,34 +187,38 @@ final class Store
     }
 
     /**
-     * Appends the given text to the comment of the latest open entry, joined
-     * by `' | '`. No-op when the merged result is identical to the existing
-     * comment (e.g. appending an empty string).
+     * Appends the given text to the comment of the latest non-day entry
+     * (whether open or closed), joined by `' | '`. Day records (those with
+     * `startTrigger === 'day'`) are skipped — their comments are managed by
+     * the `day` command flow, not by ad-hoc `comment` calls. No-op when the
+     * merged result is identical to the existing comment (e.g. appending an
+     * empty string).
      *
      * @return array{changed: bool, item: ?Record}
      */
-    public function commentOpen(string $comment): array
+    public function commentLast(string $comment): array
     {
         $items = $this->load();
-        $last = array_pop($items);
-        if ($last === null || !$last->isOpen()) {
-            if ($last !== null) {
-                $items[] = $last;
+        $targetIndex = null;
+        for ($i = count($items) - 1; $i >= 0; $i--) {
+            if ($items[$i]->startTrigger === 'day') {
+                continue;
             }
-
+            $targetIndex = $i;
+            break;
+        }
+        if ($targetIndex === null) {
             return ['changed' => false, 'item' => null];
         }
-        $merged = self::mergeComment($last->comment, $comment);
-        if ($merged === $last->comment) {
-            $items[] = $last;
-
-            return ['changed' => false, 'item' => $last];
+        $target = $items[$targetIndex];
+        $merged = self::mergeComment($target->comment, $comment);
+        if ($merged === $target->comment) {
+            return ['changed' => false, 'item' => $target];
         }
-        $updated = $last->withComment($merged, date('Y-m-d H:i'));
-        $items[] = $updated;
-        $this->save($items);
+        $items[$targetIndex] = $target->withComment($merged, date('Y-m-d H:i'));
+        $this->save(array_values($items));
 
-        return ['changed' => true, 'item' => $updated];
+        return ['changed' => true, 'item' => $items[$targetIndex]];
     }
 
     private static function mergeComment(string $existing, string $more): string

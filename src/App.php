@@ -10,6 +10,7 @@ use RuntimeException;
 use Throwable;
 use Timeshit\Local\Record;
 use Timeshit\Local\Store;
+use Timeshit\View\AllView;
 use Timeshit\View\IssuesView;
 use Timeshit\View\RecordsView;
 use Timeshit\View\WorkView;
@@ -39,6 +40,7 @@ use function is_file;
 use function is_string;
 use function max;
 use function mkdir;
+use function rtrim;
 use function sprintf;
 use function str_repeat;
 use function strtolower;
@@ -67,7 +69,7 @@ final class App
     public function __construct(private readonly string $rootDir) {}
 
     private const COMMAND_NAMES = [
-        'issues', 'work', 'records', 'types',
+        'status', 'issues', 'pushed', 'local', 'all', 'types',
         'track', 'day', 'type', 'switch',
         'pause', 'resume', 'skip', 'steal', 'end', 'comment', 'refresh',
         'at', 'before', 'after',
@@ -114,8 +116,10 @@ final class App
             match ($resolved) {
                 'help' => $this->printHelp(),
                 'issues' => $this->cmdIssues(Config::load($this->rootDir)),
-                'work' => $this->cmdWork(Config::load($this->rootDir)),
-                'records' => $this->cmdRecords(Config::load($this->rootDir)),
+                'pushed' => $this->cmdPushed(Config::load($this->rootDir)),
+                'local' => $this->cmdLocal(Config::load($this->rootDir)),
+                'all' => $this->cmdAll(Config::load($this->rootDir)),
+                'status' => $this->cmdStatus(Config::load($this->rootDir)),
                 'refresh' => $this->cmdRefresh(Config::load($this->rootDir)),
                 'track' => $this->cmdTrack($argv[2] ?? null, $argv[3] ?? null),
                 'day' => $this->cmdDay($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
@@ -163,37 +167,51 @@ final class App
         $cmd = static fn(string $name): string => Ansi::lgreen($name);
         $req = static fn(string $name): string => Ansi::yellow("<{$name}>");
         $opt = static fn(string $name): string => Ansi::lblack("[") . Ansi::yellow("<{$name}>") . Ansi::lblack("]");
+        $val = static fn(string $name): string => Ansi::lgreen($name);
 
         $groups = [
             'Lists' => [
+                [$cmd('status'),   '', 'Show the currently active record (if any) and the last closed one'],
                 [$cmd('issues'),   '', 'List YouTrack issues you are involved in (cached for 24h)'],
-                [$cmd('work'),     '', 'List your YouTrack work items grouped by week and day (cached for 24h)'],
-                [$cmd('records'),  '', 'List locally tracked records not yet synced to YouTrack'],
-                [$cmd('types'),    '', 'List the YouTrack work-item types (cached for 24h)'],
+                [$cmd('pushed'),   '', 'List time entries pushed to YouTrack grouped by week and day (cached for 24h)'],
+                [$cmd('local'),    '', 'List locally tracked records not yet synced to YouTrack'],
+                [$cmd('all'),      '', 'List time entries from both ' . $cmd('pushed') . ' and ' . $cmd('local') . ' (' . Ansi::lgreen('●') . ' synced / ' . Ansi::lyellow('○') . ' local / ' . Ansi::red('✗') . ' failed)'],
+                //[$cmd('types'),    '', 'List the YouTrack work-item types (cached for 24h)'],
             ],
             'Time' => [
-                [$cmd('track'),    $req('issue') . ' ' . $opt('type'), "Manually switch local time tracking to " . $req('issue') . " (type defaults to \"" . Ansi::lgreen(self::TRACK_DEFAULT_TYPE) . "\")"],
-                [$cmd('pause'),    $opt('comment'), 'Pause the currently tracked record (optional ' . $req('comment') . ' attached to the record)'],
-                [$cmd('resume'),   $opt('comment'), 'Resume tracking from the most recent record (optional ' . $req('comment') . ' on the new record)'],
-                [$cmd('end'),      $opt('comment'), 'End the currently tracked entry (optional ' . $req('comment') . ' attached to the record)'],
+                [$cmd('track'),    $req('issue') . ' ' . $opt('type'), 'Manually switch local time tracking to ' . $req('issue')],
+                [$cmd('pause'),    $opt('comment'), 'Pause the currently tracked record'],
+                [$cmd('resume'),   $opt('comment'), 'Resume tracking from the most recent record'],
+                [$cmd('end'),      $opt('comment'), 'End the currently tracked entry'],
                 [$cmd('skip'),     $req('offset'), 'End the open record ' . $req('offset') . ' ago and immediately open a new one (e.g. forgotten lunch break)'],
-                [$cmd('steal'),    $req('issue') . ' ' . $req('offset') . ' ' . $opt('type'), 'Punch a ' . $req('offset') . '-long hole in the open record and fill it with ' . $req('issue') . ' (type defaults to "' . Ansi::lgreen(self::TRACK_DEFAULT_TYPE) . '")'],
-                [$cmd('at'),       $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record. ' . $req('time') . ' is ' . Ansi::lgreen('HH:MM') . ' or full date+time'],
-                [$cmd('before'),   $req('offset'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('offset') . ' (e.g. ' . Ansi::lgreen('1h 20m') . ')'],
+                [$cmd('steal'),    $req('issue') . ' ' . $req('offset') . ' ' . $opt('type'), 'Punch a ' . $req('offset') . '-long hole in the open record and fill it with ' . $req('issue')],
+                [$cmd('at'),       $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record'],
+                [$cmd('before'),   $req('offset'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('offset')],
                 [$cmd('after'),    $req('offset'), 'Move the end of the last closed non-day record later by ' . $req('offset')],
-                [$cmd('day'),      $req('issue') . ' ' . $opt('date') . ' ' . $opt('type'), "Log a full 8h day (date defaults to today; accepts day-of-month int, " . Ansi::lgreen('y|yes|yesterday') . " etc.; type defaults to \"" . Ansi::lyellow(self::DAY_DEFAULT_TYPE) . '"'],
+                [$cmd('day'),      $req('issue') . ' ' . $opt('date') . ' ' . $opt('type'), 'Log a full 8h day for ' . $req('issue') . ' on ' . $req('date')],
             ],
             'Options' => [
                 [$cmd('type'),     $req('type'), 'Change the type of the currently tracked entry'],
-                [$cmd('switch'),   $req('type'), 'End the current entry and open a new one with the same issue/branch/repo and the given ' . $req('type')],
+                [$cmd('switch'),   $req('type'), 'End the current entry and open a new one with the same properties and the given ' . $req('type')],
                 [$cmd('comment'),  $req('comment'), 'Add a comment on the currently tracked entry'],
             ],
             'Sync' => [
                 [$cmd('refresh'),  '', 'Force-refresh all caches from YouTrack'],
             ],
             'Triggers' => [
-                [$cmd('checkout'), $req('branch') . ' ' . $req('repo'), "Switch tracking on git checkout (called from " . $cmd('hooks/post-checkout') . ")"],
+                [$cmd('checkout'), $req('branch') . ' ' . $req('repo'), 'Switch tracking on git checkout (called from ' . $cmd('hooks/post-checkout') . ')'],
             ],
+        ];
+
+        $argRows = [
+            [$req('issue'),   'YouTrack issue id, e.g. ' . $val('ABC-123')],
+            [$req('type'),    'work-item type; see ' . $cmd('types') . ' for the allowed list. Default: ' . Ansi::lgreen(self::TRACK_DEFAULT_TYPE) . ' (' . $cmd('track') . ' / ' . $cmd('steal') . '), ' . Ansi::lyellow(self::DAY_DEFAULT_TYPE) . ' (' . $cmd('day') . ')'],
+            [$req('offset'),  'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ', ' . $val('1d 4h 15m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m') . ', case- and whitespace-insensitive)'],
+            [$req('time'),    $val('HH:MM') . ' (keeps the date of the existing timestamp) or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
+            [$req('date'),    $val('today') . ' / ' . $val('yesterday') . ' / ' . $val('tomorrow') . ' (and unique prefixes like ' . $val('y') . ', ' . $val('over') . '), day-of-month int (e.g. ' . $val('15') . '), or ISO (e.g. ' . $val('2026-05-08') . '). Default: ' . $val('today')],
+            [$req('comment'), 'free-form text; appended to the record\'s existing comment with ' . $val(' | ') . ' separator'],
+            [$req('branch'),  'git branch name (used to extract the issue id; passed by git hook)'],
+            [$req('repo'),    'repository name (passed by git hook)'],
         ];
 
         $nameWidth = 0;
@@ -204,9 +222,13 @@ final class App
                 $argsWidth = max($argsWidth, Ansi::length($args));
             }
         }
+        $argNameWidth = 0;
+        foreach ($argRows as [$name]) {
+            $argNameWidth = max($argNameWidth, Ansi::length($name));
+        }
 
         echo Ansi::lwhite('timeshit') . ' ' . Ansi::lblack('— personal time tracker for YouTrack + Git +  GitLab') . "\n\n";
-        echo "Usage: " . $cmd('timeshit.php') . " " . $req('command') . " " . $opt('args') . "\n\n";
+        echo "Usage: " . Ansi::lblue('timeshit.php') . " " . $cmd('command') . " " . $opt('args') . "\n\n";
         foreach ($groups as $title => $rows) {
             echo Ansi::lwhite($title) . ":\n";
             foreach ($rows as [$name, $args, $desc]) {
@@ -214,6 +236,10 @@ final class App
                     . $args . str_repeat(' ', $argsWidth - Ansi::length($args) + 2)
                     . $desc . "\n";
             }
+        }
+        echo "\n" . Ansi::lwhite('Arguments') . ":\n";
+        foreach ($argRows as [$name, $desc]) {
+            echo "  " . $name . str_repeat(' ', $argNameWidth - Ansi::length($name) + 2) . $desc . "\n";
         }
     }
 
@@ -223,15 +249,108 @@ final class App
         (new IssuesView($config->youtrackBaseUrl, $data['user']))->render($data['issues'], $data['workItems']);
     }
 
-    private function cmdWork(Config $config): void
+    private function cmdPushed(Config $config): void
     {
         $data = $this->loadOrFetch($config);
         (new WorkView($config->youtrackBaseUrl))->render($data['workItems'], $data['issues']);
     }
 
-    private function cmdRecords(Config $config): void
+    private function cmdLocal(Config $config): void
     {
         $items = (new Store($this->rootDir . self::RECORDS_FILE))->load();
+        (new RecordsView($config->youtrackBaseUrl))->render($items, $this->loadIssueTitles());
+    }
+
+    private function cmdAll(Config $config): void
+    {
+        $data = $this->loadOrFetch($config);
+        $records = (new Store($this->rootDir . self::RECORDS_FILE))->load();
+        (new AllView($config->youtrackBaseUrl))->render($data['workItems'], $records, $data['issues']);
+    }
+
+    private function cmdStatus(Config $config): void
+    {
+        $items = (new Store($this->rootDir . self::RECORDS_FILE))->load();
+        $active = null;
+        $previous = null;
+        for ($i = count($items) - 1; $i >= 0; $i--) {
+            $r = $items[$i];
+            if ($r->startTrigger === 'day') {
+                continue;
+            }
+            if ($r->isOpen()) {
+                if ($active === null) {
+                    $active = $r;
+                }
+                continue;
+            }
+            $previous = $r;
+            break;
+        }
+        if ($active === null && $previous === null) {
+            echo "No tracking records.\n";
+
+            return;
+        }
+        $baseUrl = rtrim($config->youtrackBaseUrl, '/');
+        $titleByIssueId = $this->loadIssueTitles();
+        if ($active !== null) {
+            echo Ansi::lwhite('Active') . ":\n";
+            echo $this->statusLine($active, $baseUrl, $titleByIssueId) . "\n";
+        } else {
+            echo Ansi::lblack('No active record.') . "\n";
+        }
+        if ($previous !== null) {
+            echo "\n" . Ansi::lwhite('Previous') . ":\n";
+            echo $this->statusLine($previous, $baseUrl, $titleByIssueId) . "\n";
+        }
+    }
+
+    /** @param array<string, string> $titleByIssueId */
+    private function statusLine(Record $r, string $baseUrl, array $titleByIssueId): string
+    {
+        $today = date('Y-m-d');
+        $startDate = substr($r->startedAt, 0, 10);
+        $startStr = $startDate === $today ? substr($r->startedAt, 11) : $r->startedAt;
+
+        if ($r->endedAt === null) {
+            $now = date('Y-m-d H:i');
+            $duration = Format::duration($r->startedAt, $now) . ' so far';
+            $timeRange = $startStr . ' → ' . Ansi::lgreen('…');
+        } else {
+            $endDate = substr($r->endedAt, 0, 10);
+            $endStr = $endDate === $today && $startDate === $today
+                ? substr($r->endedAt, 11)
+                : $r->endedAt;
+            $duration = Format::duration($r->startedAt, $r->endedAt);
+            $timeRange = $startStr . Ansi::lblack('–') . $endStr;
+        }
+
+        $url = $baseUrl . '/issue/' . $r->issueId;
+        $line = sprintf(
+            '  %s  %s  %s  %s',
+            Ansi::link($url, $r->issueId),
+            Format::type($r->type),
+            $timeRange,
+            Ansi::lblack('(' . $duration . ')'),
+        );
+        if ($r->branch !== null) {
+            $line .= '  ' . Ansi::lblack($r->branch);
+        }
+        $title = $titleByIssueId[$r->issueId] ?? '';
+        if ($title !== '') {
+            $line .= "\n      " . $title;
+        }
+        if ($r->comment !== '') {
+            $line .= "\n      " . Ansi::lblack('"' . $r->comment . '"');
+        }
+
+        return $line;
+    }
+
+    /** @return array<string, string> */
+    private function loadIssueTitles(): array
+    {
         $titleByIssueId = [];
         $issueCachePath = $this->rootDir . self::ISSUES_CACHE_FILE;
         if (file_exists($issueCachePath)) {
@@ -240,7 +359,8 @@ final class App
                 $titleByIssueId[$issue->id] = $issue->title;
             }
         }
-        (new RecordsView($config->youtrackBaseUrl))->render($items, $titleByIssueId);
+
+        return $titleByIssueId;
     }
 
     private function cmdTypes(): void
@@ -532,15 +652,16 @@ final class App
         if ($comment === null || $comment === '') {
             throw new RuntimeException('comment: missing <text>');
         }
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->commentOpen($comment);
+        $result = (new Store($this->rootDir . self::RECORDS_FILE))->commentLast($comment);
         $item = $result['item'];
         if ($item === null) {
-            throw new RuntimeException('comment: no open tracking entry');
+            throw new RuntimeException('comment: no record to comment on');
         }
         if (!$result['changed']) {
             return;
         }
-        fprintf(STDERR, "Comment on %s: %s\n", $item->issueId, $item->comment);
+        $where = $item->isOpen() ? 'active' : 'last closed';
+        fprintf(STDERR, "Comment on %s (%s): %s\n", $item->issueId, $where, $item->comment);
     }
 
     private function cmdTrack(?string $issue, ?string $type): void

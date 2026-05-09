@@ -14,7 +14,7 @@ parameters:
     #   8 — calling methods and accessing properties on nullable types
     #   9 — strict about the `mixed` type
 
-    level: 7
+    level: 8
 
     fileExtensions:
         - php
@@ -24,3 +24,7 @@ parameters:
         - src
         - tests
         - timeshit.php
+
+    excludePaths:
+        - src/Console.php
+        - src/Os.php
