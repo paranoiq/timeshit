@@ -11,6 +11,7 @@
         "ext-mbstring": "*"
     },
     "require-dev": {
+        "nette/tester": "^2.6",
         "phpstan/phpstan": "^2.1",
         "phpstan/phpstan-strict-rules": "^2.0"
     },

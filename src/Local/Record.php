@@ -2,16 +2,17 @@
 
 namespace Timeshit\Local;
 
+use JsonSerializable;
 use RuntimeException;
 
 use function array_key_exists;
 use function is_string;
 
-final class Record
+final class Record implements JsonSerializable
 {
     public function __construct(
         public readonly string $issueId,
-        public readonly string $branch,
+        public readonly ?string $branch,
         public readonly string $repo,
         public readonly string $type,
         public readonly string $startedAt,
@@ -71,12 +72,33 @@ final class Record
         );
     }
 
+    /** @return array<string, mixed> */
+    public function jsonSerialize(): array
+    {
+        $data = [
+            'issueId' => $this->issueId,
+            'branch' => $this->branch,
+            'repo' => $this->repo,
+            'type' => $this->type,
+            'startedAt' => $this->startedAt,
+            'startTrigger' => $this->startTrigger,
+            'endedAt' => $this->endedAt,
+            'endTrigger' => $this->endTrigger,
+            'comment' => $this->comment,
+        ];
+        if ($this->branch === null) {
+            unset($data['branch']);
+        }
+
+        return $data;
+    }
+
     /** @param array<int|string, mixed> $data */
     public static function fromArray(array $data): self
     {
         return new self(
             issueId: self::str($data, 'issueId'),
-            branch: self::str($data, 'branch'),
+            branch: self::nullableStr($data, 'branch'),
             repo: self::str($data, 'repo'),
             type: self::str($data, 'type'),
             startedAt: self::str($data, 'startedAt'),

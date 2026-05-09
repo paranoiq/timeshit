@@ -51,6 +51,31 @@ final class Store
         return $items;
     }
 
+    /**
+     * Appends a closed record to the store. If the latest existing record is
+     * open, the new closed record is inserted just before it so the open
+     * record remains the last entry (preserving the "open is always latest"
+     * invariant).
+     */
+    public function appendClosed(Record $closed): void
+    {
+        if ($closed->isOpen()) {
+            throw new RuntimeException('appendClosed: record must be closed');
+        }
+        $items = $this->load();
+        $last = array_pop($items);
+        if ($last !== null && $last->isOpen()) {
+            $items[] = $closed;
+            $items[] = $last;
+        } else {
+            if ($last !== null) {
+                $items[] = $last;
+            }
+            $items[] = $closed;
+        }
+        $this->save($items);
+    }
+
     /** @param list<Record> $items */
     public function save(array $items): void
     {
