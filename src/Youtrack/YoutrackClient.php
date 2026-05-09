@@ -10,8 +10,10 @@ use function curl_exec;
 use function curl_getinfo;
 use function curl_init;
 use function curl_setopt_array;
+use function date;
 use function http_build_query;
 use function in_array;
+use function intdiv;
 use function is_array;
 use function is_int;
 use function is_string;
@@ -234,7 +236,8 @@ final class YoutrackClient
     private static function parseWorkItem(array $raw, string $issueId): WorkItem
     {
         $id = self::asString($raw['id'] ?? null) ?? '?';
-        $date = self::asInt($raw['date'] ?? null) ?? self::asInt($raw['created'] ?? null) ?? 0;
+        $dateMs = self::asInt($raw['date'] ?? null) ?? self::asInt($raw['created'] ?? null) ?? 0;
+        $date = date('Y-m-d', intdiv($dateMs, 1000));
 
         $minutes = 0;
         $duration = $raw['duration'] ?? null;

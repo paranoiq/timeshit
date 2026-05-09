@@ -1,4 +1,4 @@
-secrets
+/config/secrets.neon
 data
 composer.phar
 /vendor/

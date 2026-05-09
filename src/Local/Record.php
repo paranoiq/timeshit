@@ -19,6 +19,8 @@ final class Record implements JsonSerializable
         public readonly string $startTrigger,
         public readonly ?string $endedAt,
         public readonly ?string $endTrigger,
+        public readonly string $createdAt,
+        public readonly string $modifiedAt,
         public readonly string $comment = '',
     ) {}
 
@@ -27,7 +29,7 @@ final class Record implements JsonSerializable
         return $this->endedAt === null;
     }
 
-    public function withEnd(string $endedAt, string $endTrigger, ?string $comment = null): self
+    public function withEnd(string $endedAt, string $endTrigger, string $modifiedAt, ?string $comment = null): self
     {
         return new self(
             issueId: $this->issueId,
@@ -38,11 +40,13 @@ final class Record implements JsonSerializable
             startTrigger: $this->startTrigger,
             endedAt: $endedAt,
             endTrigger: $endTrigger,
+            createdAt: $this->createdAt,
+            modifiedAt: $modifiedAt,
             comment: $comment ?? $this->comment,
         );
     }
 
-    public function withType(string $type): self
+    public function withType(string $type, string $modifiedAt): self
     {
         return new self(
             issueId: $this->issueId,
@@ -53,11 +57,13 @@ final class Record implements JsonSerializable
             startTrigger: $this->startTrigger,
             endedAt: $this->endedAt,
             endTrigger: $this->endTrigger,
+            createdAt: $this->createdAt,
+            modifiedAt: $modifiedAt,
             comment: $this->comment,
         );
     }
 
-    public function withComment(string $comment): self
+    public function withComment(string $comment, string $modifiedAt): self
     {
         return new self(
             issueId: $this->issueId,
@@ -68,6 +74,8 @@ final class Record implements JsonSerializable
             startTrigger: $this->startTrigger,
             endedAt: $this->endedAt,
             endTrigger: $this->endTrigger,
+            createdAt: $this->createdAt,
+            modifiedAt: $modifiedAt,
             comment: $comment,
         );
     }
@@ -85,6 +93,8 @@ final class Record implements JsonSerializable
             'endedAt' => $this->endedAt,
             'endTrigger' => $this->endTrigger,
             'comment' => $this->comment,
+            'createdAt' => $this->createdAt,
+            'modifiedAt' => $this->modifiedAt,
         ];
         if ($this->branch === null) {
             unset($data['branch']);
@@ -96,15 +106,19 @@ final class Record implements JsonSerializable
     /** @param array<int|string, mixed> $data */
     public static function fromArray(array $data): self
     {
+        $startedAt = self::str($data, 'startedAt');
+
         return new self(
             issueId: self::str($data, 'issueId'),
             branch: self::nullableStr($data, 'branch'),
             repo: self::str($data, 'repo'),
             type: self::str($data, 'type'),
-            startedAt: self::str($data, 'startedAt'),
+            startedAt: $startedAt,
             startTrigger: self::str($data, 'startTrigger'),
             endedAt: self::nullableStr($data, 'endedAt'),
             endTrigger: self::nullableStr($data, 'endTrigger'),
+            createdAt: self::nullableStr($data, 'createdAt') ?? $startedAt,
+            modifiedAt: self::nullableStr($data, 'modifiedAt') ?? $startedAt,
             comment: self::nullableStr($data, 'comment') ?? '',
         );
     }

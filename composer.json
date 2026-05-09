@@ -8,7 +8,8 @@
         "ext-ffi": "*",
         "ext-intl": "*",
         "ext-json": "*",
-        "ext-mbstring": "*"
+        "ext-mbstring": "*",
+        "nette/neon": "^3.4"
     },
     "require-dev": {
         "nette/tester": "^2.6",

@@ -2,21 +2,19 @@
 
 namespace Timeshit\Local;
 
+use Nette\Neon\Neon;
 use RuntimeException;
 
+use function array_map;
 use function array_pop;
+use function date;
 use function dirname;
 use function file_exists;
 use function file_get_contents;
 use function file_put_contents;
 use function is_array;
 use function is_dir;
-use function json_decode;
-use function json_encode;
 use function mkdir;
-
-use const JSON_PRETTY_PRINT;
-use const JSON_THROW_ON_ERROR;
 
 final class Store
 {
@@ -32,9 +30,9 @@ final class Store
         if ($raw === false) {
             throw new RuntimeException("Failed to read: {$this->path}");
         }
-        $decoded = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        $decoded = Neon::decode($raw);
         if (!is_array($decoded)) {
-            throw new RuntimeException("Not a JSON object: {$this->path}");
+            throw new RuntimeException("Not a NEON map: {$this->path}");
         }
         $itemsRaw = $decoded['items'] ?? null;
         if (!is_array($itemsRaw)) {
@@ -83,9 +81,9 @@ final class Store
         if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new RuntimeException("Failed to create dir: {$dir}");
         }
-        $payload = ['items' => $items];
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
-        if (file_put_contents($this->path, $json) === false) {
+        $payload = ['items' => array_map(static fn(Record $r): array => $r->jsonSerialize(), $items)];
+        $neon = Neon::encode($payload, Neon::BLOCK);
+        if (file_put_contents($this->path, $neon) === false) {
             throw new RuntimeException("Failed to write: {$this->path}");
         }
     }
@@ -113,7 +111,7 @@ final class Store
             ) {
                 return ['started' => false, 'stopped' => null];
             }
-            $stopped = $last->withEnd($next->startedAt, $endTrigger);
+            $stopped = $last->withEnd($next->startedAt, $endTrigger, $next->createdAt);
             $items[] = $stopped;
         } elseif ($last !== null) {
             $items[] = $last;
@@ -150,7 +148,7 @@ final class Store
             return ['changed' => false, 'previousType' => $last->type, 'item' => $last];
         }
         $previous = $last->type;
-        $updated = $last->withType($newType);
+        $updated = $last->withType($newType, date('Y-m-d H:i'));
         $items[] = $updated;
         $this->save($items);
 
@@ -178,8 +176,8 @@ final class Store
             return ['ended' => false, 'item' => null];
         }
         $closed = $appendComment === null
-            ? $last->withEnd($endedAt, $endTrigger)
-            : $last->withEnd($endedAt, $endTrigger, self::mergeComment($last->comment, $appendComment));
+            ? $last->withEnd($endedAt, $endTrigger, $endedAt)
+            : $last->withEnd($endedAt, $endTrigger, $endedAt, self::mergeComment($last->comment, $appendComment));
         $items[] = $closed;
         $this->save($items);
 
@@ -210,7 +208,7 @@ final class Store
 
             return ['changed' => false, 'item' => $last];
         }
-        $updated = $last->withComment($merged);
+        $updated = $last->withComment($merged, date('Y-m-d H:i'));
         $items[] = $updated;
         $this->save($items);
 

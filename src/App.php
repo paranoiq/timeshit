@@ -4,7 +4,6 @@ namespace Timeshit;
 
 use Collator;
 use DateTimeImmutable;
-use Exception;
 use RuntimeException;
 use Throwable;
 use Timeshit\Local\Record;
@@ -20,24 +19,15 @@ use Timeshit\Youtrack\WorkItemType;
 use Timeshit\Youtrack\WorkItemTypeCache;
 use Timeshit\Youtrack\YoutrackClient;
 
-use function array_filter;
-use function array_keys;
-use function array_slice;
-use function array_values;
 use function count;
-use function in_array;
 use function date;
+use function date_default_timezone_set;
 use function file_exists;
 use function fprintf;
 use function fwrite;
-use function implode;
-use function intdiv;
+use function in_array;
 use function max;
-use function preg_match;
 use function str_repeat;
-use function str_starts_with;
-use function mb_strtolower;
-use function strtoupper;
 use function usort;
 
 use const STDERR;
@@ -45,42 +35,49 @@ use const STDERR;
 final class App
 {
 
-    private const ISSUES_CACHE_FILE = '/data/issues.json';
-    private const WORK_ITEMS_CACHE_FILE = '/data/work-items.json';
-    private const WORK_ITEM_TYPES_FILE = '/data/work-item-types.json';
-    private const RECORDS_FILE = '/data/records.json';
+    private const ISSUES_CACHE_FILE = '/data/issues.neon';
+    private const WORK_ITEMS_CACHE_FILE = '/data/work-items.neon';
+    private const WORK_ITEM_TYPES_FILE = '/data/work-item-types.neon';
+    private const RECORDS_FILE = '/data/records.neon';
 
     private const TRACK_DEFAULT_TYPE = 'Implementation';
     private const DAY_DEFAULT_TYPE = 'Out of office';
 
-    /**
-     * The whitelist of YouTrack work-item types we currently allow on local
-     * records. Anything outside this list is rejected by `matchType`.
-     */
-    public const ALLOWED_TYPES = [
-        'Analyses / Design',
-        'Communication, Meetings, ...',
-        'Documentation',
-        'Implementation',
-        'Out of office',
-        'Test / Review',
-    ];
-
     public function __construct(private readonly string $rootDir) {}
+
+    private const COMMAND_NAMES = [
+        'issues', 'work', 'records', 'types',
+        'track', 'day', 'type', 'switch',
+        'pause', 'resume', 'end', 'comment', 'refresh',
+        'checkout',
+        'help',
+    ];
 
     /** @param array<int, string> $argv */
     public function run(array $argv): int
     {
-        $command = $argv[1] ?? null;
+        $input = $argv[1] ?? null;
 
-        if ($command === null || $command === 'help' || $command === '-h' || $command === '--help') {
+        if ($input === null || $input === '' || $input === '-h' || $input === '--help') {
             $this->printHelp();
 
             return 0;
         }
 
+        date_default_timezone_set(Config::timezone($this->rootDir));
+
         try {
-            match ($command) {
+            $resolved = Resolver::matchCommand($input, self::COMMAND_NAMES);
+        } catch (RuntimeException $e) {
+            $this->ambiguousCommand($e->getMessage());
+        }
+        if ($resolved === null) {
+            $this->unknownCommand($input);
+        }
+
+        try {
+            match ($resolved) {
+                'help' => $this->printHelp(),
                 'issues' => $this->cmdIssues(Config::load($this->rootDir)),
                 'work' => $this->cmdWork(Config::load($this->rootDir)),
                 'records' => $this->cmdRecords(Config::load($this->rootDir)),
@@ -91,11 +88,11 @@ final class App
                 'type' => $this->cmdType($argv[2] ?? null),
                 'types' => $this->cmdTypes(),
                 'switch' => $this->cmdSwitch($argv[2] ?? null),
-                'pause' => $this->cmdPause(self::restArgs($argv)),
-                'resume' => $this->cmdResume(self::restArgs($argv)),
-                'end' => $this->cmdEnd(self::restArgs($argv)),
-                'comment' => $this->cmdComment(self::restArgs($argv)),
-                default => $this->unknownCommand($command),
+                'pause' => $this->cmdPause(Resolver::restArgs($argv)),
+                'resume' => $this->cmdResume(Resolver::restArgs($argv)),
+                'end' => $this->cmdEnd(Resolver::restArgs($argv)),
+                'comment' => $this->cmdComment(Resolver::restArgs($argv)),
+                default => throw new RuntimeException("dispatch: no handler for resolved command '{$resolved}'"),
             };
         } catch (Throwable $e) {
             fwrite(STDERR, Ansi::red("Error: " . $e->getMessage()) . "\n");
@@ -109,6 +106,13 @@ final class App
     private function unknownCommand(string $command): never
     {
         fwrite(STDERR, Ansi::red("Unknown command: {$command}") . "\n\n");
+        $this->printHelp();
+        exit(1);
+    }
+
+    private function ambiguousCommand(string $message): never
+    {
+        fwrite(STDERR, Ansi::red($message) . "\n\n");
         $this->printHelp();
         exit(1);
     }
@@ -209,7 +213,7 @@ final class App
             $nameWidth = max($nameWidth, Ansi::length($t->name));
         }
         foreach ($types as $t) {
-            $name = in_array($t->name, self::ALLOWED_TYPES, true) ? Ansi::lgreen($t->name) : $t->name;
+            $name = in_array($t->name, Resolver::ALLOWED_TYPES, true) ? Ansi::lgreen($t->name) : $t->name;
             echo $name . str_repeat(' ', $nameWidth - Ansi::length($name) + 2) . Ansi::lblack($t->id) . "\n";
         }
     }
@@ -222,7 +226,7 @@ final class App
 
     private function cmdType(?string $newType): void
     {
-        $matched = $this->resolveType('type', $newType, null);
+        $matched = Resolver::resolveType('type', $newType, null, $this->loadOrFetchTypes(...));
         $result = (new Store($this->rootDir . self::RECORDS_FILE))->changeOpenType($matched);
         $item = $result['item'];
         if ($item === null) {
@@ -242,7 +246,7 @@ final class App
 
     private function cmdSwitch(?string $newType): void
     {
-        $matched = $this->resolveType('switch', $newType, null);
+        $matched = Resolver::resolveType('switch', $newType, null, $this->loadOrFetchTypes(...));
         $store = new Store($this->rootDir . self::RECORDS_FILE);
         $items = $store->load();
         $last = $items === [] ? null : $items[count($items) - 1];
@@ -250,15 +254,18 @@ final class App
             throw new RuntimeException('switch: no open tracking entry');
         }
         $trigger = 'switched';
+        $now = date('Y-m-d H:i');
         $next = new Record(
             issueId: $last->issueId,
             branch: $last->branch,
             repo: $last->repo,
             type: $matched,
-            startedAt: date('c'),
+            startedAt: $now,
             startTrigger: $trigger,
             endedAt: null,
             endTrigger: null,
+            createdAt: $now,
+            modifiedAt: $now,
         );
         $result = $store->track($next, $trigger);
         if (!$result['started']) {
@@ -271,7 +278,7 @@ final class App
                 "Stopped %s (%s) after %s\n",
                 $stopped->issueId,
                 $stopped->type,
-                self::formatDuration($stopped->startedAt, $stopped->endedAt),
+                Format::duration($stopped->startedAt, $stopped->endedAt),
             );
         }
         $onBranch = $next->branch === null ? '' : " ({$next->branch})";
@@ -282,7 +289,7 @@ final class App
     private function cmdEnd(?string $comment): void
     {
         $resolved = $comment === '' ? null : $comment;
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->endOpen(date('c'), 'ended', $resolved);
+        $result = (new Store($this->rootDir . self::RECORDS_FILE))->endOpen(date('Y-m-d H:i'), 'ended', $resolved);
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('end: no open tracking entry');
@@ -292,7 +299,7 @@ final class App
             STDERR,
             "Stopped %s after %s\n",
             $item->issueId,
-            self::formatDuration($item->startedAt, $endedAt),
+            Format::duration($item->startedAt, $endedAt),
         );
         if ($item->comment !== '') {
             fprintf(STDERR, "Comment: %s\n", $item->comment);
@@ -302,7 +309,7 @@ final class App
     private function cmdPause(?string $comment): void
     {
         $resolved = $comment === '' ? null : $comment;
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->endOpen(date('c'), 'paused', $resolved);
+        $result = (new Store($this->rootDir . self::RECORDS_FILE))->endOpen(date('Y-m-d H:i'), 'paused', $resolved);
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('pause: no open tracking entry');
@@ -312,7 +319,7 @@ final class App
             STDERR,
             "Paused %s after %s\n",
             $item->issueId,
-            self::formatDuration($item->startedAt, $endedAt),
+            Format::duration($item->startedAt, $endedAt),
         );
         if ($item->comment !== '') {
             fprintf(STDERR, "Comment: %s\n", $item->comment);
@@ -330,15 +337,18 @@ final class App
         if ($last->isOpen()) {
             throw new RuntimeException('resume: a record is already open');
         }
+        $now = date('Y-m-d H:i');
         $next = new Record(
             issueId: $last->issueId,
             branch: $last->branch,
             repo: $last->repo,
             type: $last->type,
-            startedAt: date('c'),
+            startedAt: $now,
             startTrigger: 'resumed',
             endedAt: null,
             endTrigger: null,
+            createdAt: $now,
+            modifiedAt: $now,
             comment: $comment ?? '',
         );
         $store->track($next, 'resumed');
@@ -367,16 +377,16 @@ final class App
 
     private function cmdTrack(?string $issue, ?string $type): void
     {
-        $issueId = self::requireIssueId('track', $issue);
-        $resolvedType = $this->resolveType('track', $type, self::TRACK_DEFAULT_TYPE);
+        $issueId = Resolver::requireIssueId('track', $issue);
+        $resolvedType = Resolver::resolveType('track', $type, self::TRACK_DEFAULT_TYPE, $this->loadOrFetchTypes(...));
         $this->startRecord($issueId, null, '', $resolvedType, 'manual');
     }
 
     private function cmdDay(?string $issue, ?string $date, ?string $type): void
     {
-        $issueId = self::requireIssueId('day', $issue);
-        $when = self::resolveDate($date);
-        $resolvedType = $this->resolveType('day', $type, self::DAY_DEFAULT_TYPE);
+        $issueId = Resolver::requireIssueId('day', $issue);
+        $when = Resolver::resolveDate($date);
+        $resolvedType = Resolver::resolveType('day', $type, self::DAY_DEFAULT_TYPE, $this->loadOrFetchTypes(...));
         $store = new Store($this->rootDir . self::RECORDS_FILE);
         $dayKey = $when->format('Y-m-d');
         foreach ($store->load() as $existing) {
@@ -391,15 +401,18 @@ final class App
         }
         $start = $when->setTime(9, 0);
         $end = $when->setTime(17, 0);
+        $now = date('Y-m-d H:i');
         $record = new Record(
             issueId: $issueId,
             branch: null,
             repo: '',
             type: $resolvedType,
-            startedAt: $start->format('c'),
+            startedAt: $start->format('Y-m-d H:i'),
             startTrigger: 'day',
-            endedAt: $end->format('c'),
+            endedAt: $end->format('Y-m-d H:i'),
             endTrigger: 'day',
+            createdAt: $now,
+            modifiedAt: $now,
         );
         $store->appendClosed($record);
         fprintf(
@@ -419,21 +432,24 @@ final class App
         if ($repo === null || $repo === '') {
             throw new RuntimeException('checkout: missing <repo>');
         }
-        $this->startRecord(self::extractIssueId($branch), $branch, $repo, null, 'checkout');
+        $this->startRecord(Resolver::extractIssueId($branch), $branch, $repo, null, 'checkout');
     }
 
     private function startRecord(string $issueId, ?string $branch, string $repo, ?string $type, string $trigger): void
     {
         $resolvedType = $type === null || $type === '' ? self::TRACK_DEFAULT_TYPE : $type;
+        $now = date('Y-m-d H:i');
         $next = new Record(
             issueId: $issueId,
             branch: $branch,
             repo: $repo,
             type: $resolvedType,
-            startedAt: date('c'),
+            startedAt: $now,
             startTrigger: $trigger,
             endedAt: null,
             endTrigger: null,
+            createdAt: $now,
+            modifiedAt: $now,
         );
         $result = (new Store($this->rootDir . self::RECORDS_FILE))->track($next, $trigger);
         if (!$result['started']) {
@@ -445,7 +461,7 @@ final class App
                 STDERR,
                 "Stopped %s after %s\n",
                 $stopped->issueId,
-                self::formatDuration($stopped->startedAt, $stopped->endedAt),
+                Format::duration($stopped->startedAt, $stopped->endedAt),
             );
         }
         $onBranch = $branch === null ? '' : " ({$branch})";
@@ -532,145 +548,4 @@ final class App
         ];
     }
 
-    /** @param array<int, string> $argv */
-    private static function restArgs(array $argv): ?string
-    {
-        $rest = array_slice($argv, 2);
-        if ($rest === []) {
-            return null;
-        }
-
-        return implode(' ', $rest);
-    }
-
-    /**
-     * Resolves a type by exact (case-insensitive) match, falling back to a
-     * unique case-insensitive prefix. Throws on missing input (when no
-     * default is given), ambiguous prefix, or unknown input.
-     */
-    private function resolveType(string $cmd, ?string $input, ?string $default): string
-    {
-        if ($input === null || $input === '') {
-            if ($default === null) {
-                throw new RuntimeException("{$cmd}: missing <type>");
-            }
-
-            return $default;
-        }
-
-        return self::matchType($cmd, $input, $this->loadOrFetchTypes());
-    }
-
-    /** @param list<WorkItemType> $types */
-    public static function matchType(string $cmd, string $input, array $types): string
-    {
-        $allowed = array_values(array_filter(
-            $types,
-            static fn(WorkItemType $t): bool => in_array($t->name, self::ALLOWED_TYPES, true),
-        ));
-        $needle = mb_strtolower($input);
-        foreach ($allowed as $type) {
-            if (mb_strtolower($type->name) === $needle) {
-                return $type->name;
-            }
-        }
-        $matches = [];
-        foreach ($allowed as $type) {
-            if (str_starts_with(mb_strtolower($type->name), $needle)) {
-                $matches[] = $type->name;
-            }
-        }
-        if (count($matches) === 1) {
-            return $matches[0];
-        }
-        if (count($matches) > 1) {
-            throw new RuntimeException("{$cmd}: ambiguous type '{$input}', could be: " . implode(', ', $matches));
-        }
-        $names = [];
-        foreach ($allowed as $t) {
-            $names[] = $t->name;
-        }
-        throw new RuntimeException("{$cmd}: unknown type '{$input}'. Allowed: " . implode(', ', $names));
-    }
-
-    public static function requireIssueId(string $cmd, ?string $issue): string
-    {
-        if ($issue === null || $issue === '') {
-            throw new RuntimeException("{$cmd}: missing <issue>");
-        }
-        if (preg_match('/^[A-Za-z]+-\d+$/', $issue) !== 1) {
-            throw new RuntimeException("{$cmd}: invalid issue '{$issue}' (expected format like ABC-123)");
-        }
-
-        return strtoupper($issue);
-    }
-
-    private static function extractIssueId(string $branch): string
-    {
-        if (preg_match('/^([A-Za-z]{1,3}-\d+)\b/', $branch, $m) === 1) {
-            return strtoupper($m[1]);
-        }
-
-        return $branch;
-    }
-
-    public static function resolveDate(?string $input): DateTimeImmutable
-    {
-        $original = $input === null || $input === '' ? 'today' : $input;
-        if (preg_match('/^\d+$/', $original) === 1) {
-            return self::dayOfCurrentMonth((int) $original, $original);
-        }
-        $offsets = [
-            'today' => 0,
-            'yesterday' => -1,
-            'tomorrow' => 1,
-            'ereyesterday' => -2,
-            'overmorrow' => 2,
-        ];
-        $needle = mb_strtolower($original);
-        $matches = [];
-        foreach (array_keys($offsets) as $keyword) {
-            if (str_starts_with($keyword, $needle)) {
-                $matches[] = $keyword;
-            }
-        }
-        if (count($matches) === 1) {
-            return (new DateTimeImmutable('today'))->modify($offsets[$matches[0]] . ' days');
-        }
-        if (count($matches) > 1) {
-            throw new RuntimeException("day: ambiguous date '{$original}', could be: " . implode(', ', $matches));
-        }
-        try {
-            return new DateTimeImmutable($original);
-        } catch (Exception) {
-            throw new RuntimeException("day: invalid date '{$original}'");
-        }
-    }
-
-    private static function dayOfCurrentMonth(int $day, string $original): DateTimeImmutable
-    {
-        $today = new DateTimeImmutable('today');
-        $year = (int) $today->format('Y');
-        $month = (int) $today->format('m');
-        $resolved = $today->setDate($year, $month, $day);
-        if ((int) $resolved->format('j') !== $day || (int) $resolved->format('n') !== $month) {
-            throw new RuntimeException("day: invalid day-of-month '{$original}' for the current month");
-        }
-
-        return $resolved;
-    }
-
-    private static function formatDuration(string $startedAt, string $endedAt): string
-    {
-        $start = new DateTimeImmutable($startedAt);
-        $end = new DateTimeImmutable($endedAt);
-        $minutes = max(0, intdiv($end->getTimestamp() - $start->getTimestamp(), 60));
-        if ($minutes < 60) {
-            return "{$minutes}m";
-        }
-        $hours = intdiv($minutes, 60);
-        $mins = $minutes % 60;
-
-        return $mins === 0 ? "{$hours}h" : "{$hours}h {$mins}m";
-    }
 }

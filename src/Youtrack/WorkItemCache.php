@@ -2,8 +2,10 @@
 
 namespace Timeshit\Youtrack;
 
+use Nette\Neon\Neon;
 use RuntimeException;
 
+use function array_map;
 use function dirname;
 use function file_exists;
 use function file_get_contents;
@@ -12,13 +14,8 @@ use function filemtime;
 use function is_array;
 use function is_dir;
 use function is_string;
-use function json_decode;
-use function json_encode;
 use function mkdir;
 use function time;
-
-use const JSON_PRETTY_PRINT;
-use const JSON_THROW_ON_ERROR;
 
 final class WorkItemCache
 {
@@ -46,9 +43,9 @@ final class WorkItemCache
         if ($raw === false) {
             throw new RuntimeException("Failed to read cache: {$this->path}");
         }
-        $decoded = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        $decoded = Neon::decode($raw);
         if (!is_array($decoded)) {
-            throw new RuntimeException("Cache file is not a JSON object: {$this->path}");
+            throw new RuntimeException("Cache file is not a NEON map: {$this->path}");
         }
         $user = $decoded['user'] ?? null;
         if (!is_string($user)) {
@@ -76,9 +73,12 @@ final class WorkItemCache
         if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new RuntimeException("Failed to create cache dir: {$dir}");
         }
-        $payload = ['user' => $user, 'items' => $items];
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
-        if (file_put_contents($this->path, $json) === false) {
+        $payload = [
+            'user' => $user,
+            'items' => array_map(static fn(WorkItem $w): array => (array) $w, $items),
+        ];
+        $neon = Neon::encode($payload, Neon::BLOCK);
+        if (file_put_contents($this->path, $neon) === false) {
             throw new RuntimeException("Failed to write cache: {$this->path}");
         }
     }

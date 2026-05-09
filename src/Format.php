@@ -2,6 +2,8 @@
 
 namespace Timeshit;
 
+use DateTimeImmutable;
+
 use function array_keys;
 use function array_values;
 use function explode;
@@ -17,6 +19,20 @@ use function str_replace;
 
 final class Format
 {
+    public static function duration(string $startedAt, string $endedAt): string
+    {
+        $start = new DateTimeImmutable($startedAt);
+        $end = new DateTimeImmutable($endedAt);
+        $minutes = max(0, intdiv($end->getTimestamp() - $start->getTimestamp(), 60));
+        if ($minutes < 60) {
+            return "{$minutes}m";
+        }
+        $hours = intdiv($minutes, 60);
+        $mins = $minutes % 60;
+
+        return $mins === 0 ? "{$hours}h" : "{$hours}h {$mins}m";
+    }
+
     public static function category(string $category): string
     {
         $shorts = [

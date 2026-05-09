@@ -2,13 +2,12 @@
 
 namespace Timeshit\View;
 
+use DateTimeImmutable;
 use Timeshit\Ansi;
 use Timeshit\Format;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\WorkItem;
 
-use function date;
-use function intdiv;
 use function max;
 use function mb_strimwidth;
 use function mb_strwidth;
@@ -48,9 +47,8 @@ final class WorkView
         $dayTotal = [];
         $grandTotal = 0;
         foreach ($workItems as $item) {
-            $seconds = intdiv($item->date, 1000);
-            $weekKey = date('o-\WW', $seconds);
-            $dayKey = date('Y-m-d', $seconds);
+            $weekKey = (new DateTimeImmutable($item->date))->format('o-\WW');
+            $dayKey = $item->date;
             $weekTotal[$weekKey] = ($weekTotal[$weekKey] ?? 0) + $item->minutes;
             $dayTotal[$dayKey] = ($dayTotal[$dayKey] ?? 0) + $item->minutes;
             $grandTotal += $item->minutes;
@@ -59,9 +57,9 @@ final class WorkView
         $currentWeek = '';
         $currentDay = '';
         foreach ($workItems as $item) {
-            $seconds = intdiv($item->date, 1000);
-            $weekKey = date('o-\WW', $seconds);
-            $dayKey = date('Y-m-d', $seconds);
+            $dt = new DateTimeImmutable($item->date);
+            $weekKey = $dt->format('o-\WW');
+            $dayKey = $item->date;
 
             if ($weekKey !== $currentWeek) {
                 $weekColor = $weekTotal[$weekKey] >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
@@ -70,8 +68,8 @@ final class WorkView
                 $currentDay = '';
             }
             if ($dayKey !== $currentDay) {
-                $dayLabel = date('l j.n.', $seconds);
-                $isWeekend = (int)date('N', $seconds) >= 6;
+                $dayLabel = $dt->format('l j.n.');
+                $isWeekend = (int) $dt->format('N') >= 6;
                 $dayColor = match (true) {
                     $isWeekend => Ansi::yellow(...),
                     $dayTotal[$dayKey] >= 8 * 60 => Ansi::lgreen(...),

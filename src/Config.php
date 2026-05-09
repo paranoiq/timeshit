@@ -2,48 +2,84 @@
 
 namespace Timeshit;
 
+use Nette\Neon\Neon;
 use RuntimeException;
 
 use function file_get_contents;
+use function is_array;
 use function is_file;
 use function is_string;
-use function parse_ini_file;
-use function trim;
 
 final class Config
 {
+    private const CONFIG_FILE = '/config/config.neon';
+    private const SECRETS_FILE = '/config/secrets.neon';
+
     private function __construct(
         public readonly string $youtrackBaseUrl,
         public readonly string $youtrackToken,
+        public readonly string $timezone,
     ) {}
 
     public static function load(string $rootDir): self
     {
-        $iniPath = $rootDir . '/config.ini';
-        $tokenPath = $rootDir . '/secrets/youtrack-token.txt';
-
-        if (!is_file($iniPath)) {
-            throw new RuntimeException("Config file not found: {$iniPath}");
-        }
-        if (!is_file($tokenPath)) {
-            throw new RuntimeException("Token file not found: {$tokenPath}");
-        }
-
-        $ini = parse_ini_file($iniPath);
-        if ($ini === false) {
-            throw new RuntimeException("Failed to parse {$iniPath}");
+        $cfg = self::readConfig($rootDir);
+        $secrets = self::readNeon($rootDir . self::SECRETS_FILE);
+        $token = $secrets['youtrackToken'] ?? null;
+        if (!is_string($token) || $token === '') {
+            throw new RuntimeException(
+                "Missing youtrackToken in {$rootDir}" . self::SECRETS_FILE,
+            );
         }
 
-        $baseUrl = $ini['youtrack_base_url'] ?? null;
+        return new self($cfg['youtrackBaseUrl'], $token, $cfg['timezone']);
+    }
+
+    /**
+     * Reads only the timezone from the config file. Used by callers that need
+     * the configured timezone without touching the secrets file (e.g. the CLI
+     * dispatcher setting `date_default_timezone_set` for record timestamps).
+     */
+    public static function timezone(string $rootDir): string
+    {
+        return self::readConfig($rootDir)['timezone'];
+    }
+
+    /** @return array{youtrackBaseUrl: string, timezone: string} */
+    private static function readConfig(string $rootDir): array
+    {
+        $data = self::readNeon($rootDir . self::CONFIG_FILE);
+        $baseUrl = $data['youtrackBaseUrl'] ?? null;
         if (!is_string($baseUrl) || $baseUrl === '') {
-            throw new RuntimeException("Missing youtrack_base_url in {$iniPath}");
+            throw new RuntimeException(
+                "Missing youtrackBaseUrl in {$rootDir}" . self::CONFIG_FILE,
+            );
+        }
+        $timezone = $data['timezone'] ?? null;
+        if (!is_string($timezone) || $timezone === '') {
+            throw new RuntimeException(
+                "Missing timezone in {$rootDir}" . self::CONFIG_FILE,
+            );
         }
 
-        $token = trim((string)file_get_contents($tokenPath));
-        if ($token === '') {
-            throw new RuntimeException("Token file is empty: {$tokenPath}");
+        return ['youtrackBaseUrl' => $baseUrl, 'timezone' => $timezone];
+    }
+
+    /** @return array<string, mixed> */
+    private static function readNeon(string $path): array
+    {
+        if (!is_file($path)) {
+            throw new RuntimeException("Config file not found: {$path}");
+        }
+        $raw = file_get_contents($path);
+        if ($raw === false) {
+            throw new RuntimeException("Failed to read: {$path}");
+        }
+        $decoded = Neon::decode($raw);
+        if (!is_array($decoded)) {
+            throw new RuntimeException("Not a NEON map: {$path}");
         }
 
-        return new self($baseUrl, $token);
+        return $decoded;
     }
 }
