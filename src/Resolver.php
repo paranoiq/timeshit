@@ -17,6 +17,7 @@ use function implode;
 use function in_array;
 use function mb_strtolower;
 use function preg_match;
+use function preg_replace;
 use function str_starts_with;
 use function strtoupper;
 
@@ -73,6 +74,65 @@ final class Resolver
         }
 
         return $branch;
+    }
+
+    /**
+     * Parses a YouTrack-style duration like `1h 20m`, `30m`, `2h`, `1d 4h 15m`
+     * into a strictly positive number of minutes. Components must appear in
+     * `d h m` order (any subset). Whitespace is ignored, case is ignored.
+     */
+    public static function parseOffset(string $cmd, ?string $input): int
+    {
+        if ($input === null || $input === '') {
+            throw new RuntimeException("{$cmd}: missing <offset>");
+        }
+        $cleaned = preg_replace('/\s+/', '', $input);
+        if ($cleaned === null || $cleaned === '') {
+            throw new RuntimeException("{$cmd}: invalid offset '{$input}' (expected e.g. '1h 20m')");
+        }
+        if (preg_match('/^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/i', $cleaned, $m) !== 1) {
+            throw new RuntimeException("{$cmd}: invalid offset '{$input}' (expected e.g. '1h 20m')");
+        }
+        $days = (int) ($m[1] ?? '');
+        $hours = (int) ($m[2] ?? '');
+        $mins = (int) ($m[3] ?? '');
+        $total = $days * 24 * 60 + $hours * 60 + $mins;
+        if ($total <= 0) {
+            throw new RuntimeException("{$cmd}: invalid offset '{$input}' (must be > 0)");
+        }
+
+        return $total;
+    }
+
+    /**
+     * Resolves a `<time>` argument used by `at`. Bare `HH:MM` or `H:MM` keeps
+     * the date of `$existingDateTime`; anything else is parsed by
+     * `DateTimeImmutable`.
+     */
+    public static function resolveTime(string $cmd, ?string $input, string $existingDateTime): DateTimeImmutable
+    {
+        if ($input === null || $input === '') {
+            throw new RuntimeException("{$cmd}: missing <time>");
+        }
+        if (preg_match('/^(\d{1,2}):(\d{2})$/', $input, $m) === 1) {
+            $h = (int) $m[1];
+            $mn = (int) $m[2];
+            if ($h > 23 || $mn > 59) {
+                throw new RuntimeException("{$cmd}: invalid time '{$input}'");
+            }
+            try {
+                $base = new DateTimeImmutable($existingDateTime);
+            } catch (Exception) {
+                throw new RuntimeException("{$cmd}: invalid existing time '{$existingDateTime}'");
+            }
+
+            return $base->setTime($h, $mn);
+        }
+        try {
+            return new DateTimeImmutable($input);
+        } catch (Exception) {
+            throw new RuntimeException("{$cmd}: invalid time '{$input}'");
+        }
     }
 
     public static function resolveDate(?string $input): DateTimeImmutable

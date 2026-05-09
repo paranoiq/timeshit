@@ -22,6 +22,8 @@ final class Record implements JsonSerializable
         public readonly string $createdAt,
         public readonly string $modifiedAt,
         public readonly string $comment = '',
+        public readonly ?string $origStartedAt = null,
+        public readonly ?string $origEndedAt = null,
     ) {}
 
     public function isOpen(): bool
@@ -43,6 +45,8 @@ final class Record implements JsonSerializable
             createdAt: $this->createdAt,
             modifiedAt: $modifiedAt,
             comment: $comment ?? $this->comment,
+            origStartedAt: $this->origStartedAt,
+            origEndedAt: $this->origEndedAt,
         );
     }
 
@@ -60,6 +64,8 @@ final class Record implements JsonSerializable
             createdAt: $this->createdAt,
             modifiedAt: $modifiedAt,
             comment: $this->comment,
+            origStartedAt: $this->origStartedAt,
+            origEndedAt: $this->origEndedAt,
         );
     }
 
@@ -77,6 +83,59 @@ final class Record implements JsonSerializable
             createdAt: $this->createdAt,
             modifiedAt: $modifiedAt,
             comment: $comment,
+            origStartedAt: $this->origStartedAt,
+            origEndedAt: $this->origEndedAt,
+        );
+    }
+
+    public function withStartedAt(string $startedAt, string $modifiedAt): self
+    {
+        $orig = $this->origStartedAt;
+        if ($startedAt !== $this->startedAt && $orig === null) {
+            $orig = $this->startedAt;
+        }
+
+        return new self(
+            issueId: $this->issueId,
+            branch: $this->branch,
+            repo: $this->repo,
+            type: $this->type,
+            startedAt: $startedAt,
+            startTrigger: $this->startTrigger,
+            endedAt: $this->endedAt,
+            endTrigger: $this->endTrigger,
+            createdAt: $this->createdAt,
+            modifiedAt: $modifiedAt,
+            comment: $this->comment,
+            origStartedAt: $orig,
+            origEndedAt: $this->origEndedAt,
+        );
+    }
+
+    public function withEndedAt(string $endedAt, string $modifiedAt): self
+    {
+        if ($this->endedAt === null) {
+            throw new RuntimeException('withEndedAt: record is open (use withEnd to close it)');
+        }
+        $orig = $this->origEndedAt;
+        if ($endedAt !== $this->endedAt && $orig === null) {
+            $orig = $this->endedAt;
+        }
+
+        return new self(
+            issueId: $this->issueId,
+            branch: $this->branch,
+            repo: $this->repo,
+            type: $this->type,
+            startedAt: $this->startedAt,
+            startTrigger: $this->startTrigger,
+            endedAt: $endedAt,
+            endTrigger: $this->endTrigger,
+            createdAt: $this->createdAt,
+            modifiedAt: $modifiedAt,
+            comment: $this->comment,
+            origStartedAt: $this->origStartedAt,
+            origEndedAt: $orig,
         );
     }
 
@@ -92,12 +151,20 @@ final class Record implements JsonSerializable
             'startTrigger' => $this->startTrigger,
             'endedAt' => $this->endedAt,
             'endTrigger' => $this->endTrigger,
+            'origStartedAt' => $this->origStartedAt,
+            'origEndedAt' => $this->origEndedAt,
             'comment' => $this->comment,
             'createdAt' => $this->createdAt,
             'modifiedAt' => $this->modifiedAt,
         ];
         if ($this->branch === null) {
             unset($data['branch']);
+        }
+        if ($this->origStartedAt === null) {
+            unset($data['origStartedAt']);
+        }
+        if ($this->origEndedAt === null) {
+            unset($data['origEndedAt']);
         }
 
         return $data;
@@ -120,6 +187,8 @@ final class Record implements JsonSerializable
             createdAt: self::nullableStr($data, 'createdAt') ?? $startedAt,
             modifiedAt: self::nullableStr($data, 'modifiedAt') ?? $startedAt,
             comment: self::nullableStr($data, 'comment') ?? '',
+            origStartedAt: self::nullableStr($data, 'origStartedAt'),
+            origEndedAt: self::nullableStr($data, 'origEndedAt'),
         );
     }
 
