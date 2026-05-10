@@ -31,19 +31,6 @@ use function strtoupper;
  */
 final class Resolver
 {
-    /**
-     * The whitelist of YouTrack work-item types we currently allow on local
-     * records. Anything outside this list is rejected by `matchType`.
-     */
-    public const ALLOWED_TYPES = [
-        'Analyses / Design',
-        'Communication, Meetings, ...',
-        'Documentation',
-        'Implementation',
-        'Out of office',
-        'Test / Review',
-    ];
-
     /** @param array<int, string> $argv */
     public static function restArgs(array $argv): ?string
     {
@@ -189,8 +176,9 @@ final class Resolver
      * resolves through `matchType`.
      *
      * @param Closure(): list<WorkItemType> $typesLoader
+     * @param list<string> $allowedNames
      */
-    public static function resolveType(string $cmd, ?string $input, ?string $default, Closure $typesLoader): string
+    public static function resolveType(string $cmd, ?string $input, ?string $default, Closure $typesLoader, array $allowedNames): string
     {
         if ($input === null || $input === '') {
             if ($default === null) {
@@ -200,15 +188,18 @@ final class Resolver
             return $default;
         }
 
-        return self::matchType($cmd, $input, $typesLoader());
+        return self::matchType($cmd, $input, $typesLoader(), $allowedNames);
     }
 
-    /** @param list<WorkItemType> $types */
-    public static function matchType(string $cmd, string $input, array $types): string
+    /**
+     * @param list<WorkItemType> $types
+     * @param list<string> $allowedNames
+     */
+    public static function matchType(string $cmd, string $input, array $types, array $allowedNames): string
     {
         $allowed = array_values(array_filter(
             $types,
-            static fn(WorkItemType $t): bool => in_array($t->name, self::ALLOWED_TYPES, true),
+            static fn(WorkItemType $t): bool => in_array($t->name, $allowedNames, true),
         ));
         $needle = mb_strtolower($input);
         foreach ($allowed as $type) {

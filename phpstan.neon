@@ -26,5 +26,4 @@ parameters:
         - timeshit.php
 
     excludePaths:
-        - src/Console.php
-        - src/Os.php
+

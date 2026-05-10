@@ -9,17 +9,21 @@ use function array_map;
 use function array_pop;
 use function array_values;
 use function count;
-use function date;
 use function dirname;
 use function file_exists;
 use function file_get_contents;
 use function file_put_contents;
 use function is_array;
 use function is_dir;
+use function is_int;
+use function max;
 use function mkdir;
 
-final class Store
+final class FileRecordStore implements RecordStore
 {
+    /** Highest id ever generated; persisted as the top-level `lastId` in the NEON file so it survives archival of high-id records. */
+    private ?int $lastId = null;
+
     public function __construct(private readonly string $path) {}
 
     /** @return list<Record> */
@@ -40,23 +44,59 @@ final class Store
         if (!is_array($itemsRaw)) {
             return [];
         }
-        $items = [];
+        $rawLastId = $decoded['lastId'] ?? null;
+        $diskLastId = is_int($rawLastId) ? $rawLastId : null;
+
+        $maxExistingId = 0;
         foreach ($itemsRaw as $item) {
             if (!is_array($item)) {
                 continue;
             }
-            $items[] = Record::fromArray($item);
+            $rid = $item['id'] ?? null;
+            if (is_int($rid) && $rid > $maxExistingId) {
+                $maxExistingId = $rid;
+            }
+        }
+
+        $items = [];
+        $needsBackfill = false;
+        $nextFallback = max($diskLastId ?? 0, $maxExistingId) + 1;
+        foreach ($itemsRaw as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $rid = $item['id'] ?? null;
+            if (is_int($rid)) {
+                $items[] = Record::fromArray($item);
+            } else {
+                $needsBackfill = true;
+                $items[] = Record::fromArray($item, $nextFallback);
+                $nextFallback++;
+            }
+        }
+
+        $observedLastId = max($diskLastId ?? 0, $nextFallback - 1);
+        if ($this->lastId === null || $observedLastId > $this->lastId) {
+            $this->lastId = $observedLastId;
+        }
+
+        if ($needsBackfill || $diskLastId === null) {
+            $this->save($items);
         }
 
         return $items;
     }
 
-    /**
-     * Appends a closed record to the store. If the latest existing record is
-     * open, the new closed record is inserted just before it so the open
-     * record remains the last entry (preserving the "open is always latest"
-     * invariant).
-     */
+    public function nextId(): int
+    {
+        if ($this->lastId === null) {
+            $this->load();
+        }
+        $this->lastId = ($this->lastId ?? 0) + 1;
+
+        return $this->lastId;
+    }
+
     public function appendClosed(Record $closed): void
     {
         if ($closed->isOpen()) {
@@ -83,23 +123,24 @@ final class Store
         if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new RuntimeException("Failed to create dir: {$dir}");
         }
-        $payload = ['items' => array_map(static fn(Record $r): array => $r->jsonSerialize(), $items)];
+        $lastId = $this->lastId ?? 0;
+        foreach ($items as $r) {
+            if ($r->id > $lastId) {
+                $lastId = $r->id;
+            }
+        }
+        $this->lastId = $lastId;
+        $payload = [
+            'lastId' => $lastId,
+            'items' => array_map(static fn(Record $r): array => $r->jsonSerialize(), $items),
+        ];
         $neon = Neon::encode($payload, Neon::BLOCK);
         if (file_put_contents($this->path, $neon) === false) {
             throw new RuntimeException("Failed to write: {$this->path}");
         }
     }
 
-    /**
-     * Closes the open entry (if any) with the given end timestamp and trigger,
-     * then appends a new open entry. If the open entry already matches the new
-     * one (same issueId, branch, repo, type), nothing is written.
-     *
-     * @return array{started: bool, stopped: ?Record}
-     *     started: true when a new entry was appended;
-     *     stopped: the just-closed previous entry (with endedAt set), or null
-     *     when there was no prior open entry or the call was a no-op.
-     */
+    /** @return array{started: bool, stopped: ?Record} */
     public function track(Record $next, string $endTrigger): array
     {
         $items = $this->load();
@@ -124,16 +165,8 @@ final class Store
         return ['started' => true, 'stopped' => $stopped];
     }
 
-    /**
-     * Replaces the type of the latest open entry. No-op when the open entry
-     * already has this type.
-     *
-     * @return array{changed: bool, previousType: ?string, item: ?Record}
-     *     changed: true when the file was rewritten;
-     *     previousType: the prior type when there was an open entry, else null;
-     *     item: the (now updated) open entry, or null when no entry was open.
-     */
-    public function changeOpenType(string $newType): array
+    /** @return array{changed: bool, previousType: ?string, item: ?Record} */
+    public function changeOpenType(string $newType, string $modifiedAt): array
     {
         $items = $this->load();
         $last = array_pop($items);
@@ -150,22 +183,14 @@ final class Store
             return ['changed' => false, 'previousType' => $last->type, 'item' => $last];
         }
         $previous = $last->type;
-        $updated = $last->withType($newType, date('Y-m-d H:i'));
+        $updated = $last->withType($newType, $modifiedAt);
         $items[] = $updated;
         $this->save($items);
 
         return ['changed' => true, 'previousType' => $previous, 'item' => $updated];
     }
 
-    /**
-     * Closes the latest open entry. When $appendComment is non-null and
-     * non-empty it is appended to the entry's existing comment using
-     * `' | '` as separator.
-     *
-     * @return array{ended: bool, item: ?Record}
-     *     ended: true when the file was rewritten;
-     *     item: the now-closed entry, or null when there was no open entry.
-     */
+    /** @return array{ended: bool, item: ?Record} */
     public function endOpen(string $endedAt, string $endTrigger, ?string $appendComment): array
     {
         $items = $this->load();
@@ -186,17 +211,8 @@ final class Store
         return ['ended' => true, 'item' => $closed];
     }
 
-    /**
-     * Appends the given text to the comment of the latest non-day entry
-     * (whether open or closed), joined by `' | '`. Day records (those with
-     * `startTrigger === 'day'`) are skipped — their comments are managed by
-     * the `day` command flow, not by ad-hoc `comment` calls. No-op when the
-     * merged result is identical to the existing comment (e.g. appending an
-     * empty string).
-     *
-     * @return array{changed: bool, item: ?Record}
-     */
-    public function commentLast(string $comment): array
+    /** @return array{changed: bool, item: ?Record} */
+    public function commentLast(string $comment, string $modifiedAt): array
     {
         $items = $this->load();
         $targetIndex = null;
@@ -215,7 +231,7 @@ final class Store
         if ($merged === $target->comment) {
             return ['changed' => false, 'item' => $target];
         }
-        $items[$targetIndex] = $target->withComment($merged, date('Y-m-d H:i'));
+        $items[$targetIndex] = $target->withComment($merged, $modifiedAt);
         $this->save(array_values($items));
 
         return ['changed' => true, 'item' => $items[$targetIndex]];

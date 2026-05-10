@@ -1,2 +1,9 @@
 youtrackBaseUrl: https://flowbox.youtrack.cloud/
 timezone: Europe/Prague
+allowedTypes:
+	- Analyses / Design
+	- 'Communication, Meetings, ...'
+	- Documentation
+	- Implementation
+	- Out of office
+	- Test / Review

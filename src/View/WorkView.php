@@ -3,11 +3,10 @@
 namespace Timeshit\View;
 
 use DateTimeImmutable;
-use Timeshit\Ansi;
 use Timeshit\Format;
+use Timeshit\Util\Ansi;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\WorkItem;
-
 use function max;
 use function mb_strimwidth;
 use function mb_strwidth;

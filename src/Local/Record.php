@@ -6,11 +6,13 @@ use JsonSerializable;
 use RuntimeException;
 
 use function array_key_exists;
+use function is_int;
 use function is_string;
 
 final class Record implements JsonSerializable
 {
     public function __construct(
+        public readonly int $id,
         public readonly string $issueId,
         public readonly ?string $branch,
         public readonly string $repo,
@@ -34,6 +36,7 @@ final class Record implements JsonSerializable
     public function withEnd(string $endedAt, string $endTrigger, string $modifiedAt, ?string $comment = null): self
     {
         return new self(
+            id: $this->id,
             issueId: $this->issueId,
             branch: $this->branch,
             repo: $this->repo,
@@ -53,6 +56,7 @@ final class Record implements JsonSerializable
     public function withType(string $type, string $modifiedAt): self
     {
         return new self(
+            id: $this->id,
             issueId: $this->issueId,
             branch: $this->branch,
             repo: $this->repo,
@@ -72,6 +76,7 @@ final class Record implements JsonSerializable
     public function withComment(string $comment, string $modifiedAt): self
     {
         return new self(
+            id: $this->id,
             issueId: $this->issueId,
             branch: $this->branch,
             repo: $this->repo,
@@ -96,6 +101,7 @@ final class Record implements JsonSerializable
         }
 
         return new self(
+            id: $this->id,
             issueId: $this->issueId,
             branch: $this->branch,
             repo: $this->repo,
@@ -123,6 +129,7 @@ final class Record implements JsonSerializable
         }
 
         return new self(
+            id: $this->id,
             issueId: $this->issueId,
             branch: $this->branch,
             repo: $this->repo,
@@ -143,6 +150,7 @@ final class Record implements JsonSerializable
     public function jsonSerialize(): array
     {
         $data = [
+            'id' => $this->id,
             'issueId' => $this->issueId,
             'branch' => $this->branch,
             'repo' => $this->repo,
@@ -170,12 +178,18 @@ final class Record implements JsonSerializable
         return $data;
     }
 
-    /** @param array<int|string, mixed> $data */
-    public static function fromArray(array $data): self
+    /**
+     * @param array<int|string, mixed> $data
+     * @param int                      $fallbackId used when the data lacks an `id` (legacy records); the file store assigns sequential ids and persists on next save
+     */
+    public static function fromArray(array $data, int $fallbackId = 0): self
     {
         $startedAt = self::str($data, 'startedAt');
+        $rawId = $data['id'] ?? null;
+        $id = is_int($rawId) ? $rawId : $fallbackId;
 
         return new self(
+            id: $id,
             issueId: self::str($data, 'issueId'),
             branch: self::nullableStr($data, 'branch'),
             repo: self::str($data, 'repo'),

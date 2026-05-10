@@ -3,12 +3,11 @@
 namespace Timeshit\View;
 
 use DateTimeImmutable;
-use Timeshit\Ansi;
 use Timeshit\Format;
 use Timeshit\Local\Record;
+use Timeshit\Util\Ansi;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\WorkItem;
-
 use function intdiv;
 use function max;
 use function mb_strimwidth;
@@ -51,7 +50,7 @@ final class AllView
         }
 
         $now = time();
-        /** @var list<array{status: string, date: string, minutes: int, issueId: string, type: string, text: string}> $rows */
+        /** @var list<array{status: string, date: string, minutes: int, issueId: string, recordId: ?int, type: string, text: string}> $rows */
         $rows = [];
         foreach ($workItems as $wi) {
             $rows[] = [
@@ -59,6 +58,7 @@ final class AllView
                 'date' => $wi->date,
                 'minutes' => $wi->minutes,
                 'issueId' => $wi->issueId,
+                'recordId' => null,
                 'type' => $wi->type,
                 'text' => $wi->text,
             ];
@@ -74,6 +74,7 @@ final class AllView
                 'date' => substr($r->startedAt, 0, 10),
                 'minutes' => $minutes,
                 'issueId' => $r->issueId,
+                'recordId' => $r->id,
                 'type' => $r->type,
                 'text' => $r->comment,
             ];
@@ -125,7 +126,10 @@ final class AllView
             $url = $baseUrl . '/issue/' . $row['issueId'];
             $type = Format::type($row['type']);
             $title = self::pad(mb_strimwidth($titleByIssueId[$row['issueId']] ?? '', 0, 50, '…'), 50);
-            $text = $row['text'] === '' ? '' : '  ' . Ansi::lblack($row['text']);
+            $textTail = $row['text'] === '' ? '' : ' ' . Ansi::lblack($row['text']);
+            $text = $row['recordId'] !== null
+                ? '  ' . Format::recordId($row['recordId']) . $textTail
+                : ($textTail === '' ? '' : ' ' . $textTail);
             echo sprintf(
                 "    %s %s  %s  %s  %s%s\n",
                 self::statusIndicator($row['status']),

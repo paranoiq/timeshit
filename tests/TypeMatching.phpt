@@ -29,64 +29,73 @@ $types = [
     new WorkItemType('13', 'Čas na cestě'),                    // not allowed
 ];
 
+$allowed = [
+    'Implementation',
+    'Out of office',
+    'Documentation',
+    'Test / Review',
+    'Analyses / Design',
+    'Communication, Meetings, ...',
+];
+
 // --- exact case-insensitive match against allowed types only ----------------
 
-Assert::same('Implementation',               Resolver::matchType('cmd', 'Implementation', $types));
-Assert::same('Implementation',               Resolver::matchType('cmd', 'implementation', $types));
-Assert::same('Implementation',               Resolver::matchType('cmd', 'IMPLEMENTATION', $types));
-Assert::same('Out of office',                Resolver::matchType('cmd', 'out of office', $types));
-Assert::same('Documentation',                Resolver::matchType('cmd', 'Documentation', $types));
-Assert::same('Test / Review',                Resolver::matchType('cmd', 'Test / Review', $types));
-Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'analyses / design', $types));
-Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'Communication, Meetings, ...', $types));
+Assert::same('Implementation',               Resolver::matchType('cmd', 'Implementation', $types, $allowed));
+Assert::same('Implementation',               Resolver::matchType('cmd', 'implementation', $types, $allowed));
+Assert::same('Implementation',               Resolver::matchType('cmd', 'IMPLEMENTATION', $types, $allowed));
+Assert::same('Out of office',                Resolver::matchType('cmd', 'out of office', $types, $allowed));
+Assert::same('Documentation',                Resolver::matchType('cmd', 'Documentation', $types, $allowed));
+Assert::same('Test / Review',                Resolver::matchType('cmd', 'Test / Review', $types, $allowed));
+Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'analyses / design', $types, $allowed));
+Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'Communication, Meetings, ...', $types, $allowed));
 
 // --- unique case-insensitive prefix on allowed types ------------------------
 
 // Each allowed type starts with a unique letter, so single-letter prefixes
 // are always unique.
-Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'a',    $types));
-Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'c',    $types));
-Assert::same('Documentation',                Resolver::matchType('cmd', 'd',    $types));
-Assert::same('Implementation',               Resolver::matchType('cmd', 'i',    $types));
-Assert::same('Out of office',                Resolver::matchType('cmd', 'o',    $types));
-Assert::same('Test / Review',                Resolver::matchType('cmd', 't',    $types));
+Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'a',    $types, $allowed));
+Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'c',    $types, $allowed));
+Assert::same('Documentation',                Resolver::matchType('cmd', 'd',    $types, $allowed));
+Assert::same('Implementation',               Resolver::matchType('cmd', 'i',    $types, $allowed));
+Assert::same('Out of office',                Resolver::matchType('cmd', 'o',    $types, $allowed));
+Assert::same('Test / Review',                Resolver::matchType('cmd', 't',    $types, $allowed));
 
 // Longer prefixes also resolve.
-Assert::same('Implementation', Resolver::matchType('cmd', 'imp',  $types));
-Assert::same('Implementation', Resolver::matchType('cmd', 'IMPL', $types));
-Assert::same('Out of office',  Resolver::matchType('cmd', 'ou',   $types));
-Assert::same('Documentation',  Resolver::matchType('cmd', 'doc',  $types));
-Assert::same('Test / Review',  Resolver::matchType('cmd', 'test', $types));
+Assert::same('Implementation', Resolver::matchType('cmd', 'imp',  $types, $allowed));
+Assert::same('Implementation', Resolver::matchType('cmd', 'IMPL', $types, $allowed));
+Assert::same('Out of office',  Resolver::matchType('cmd', 'ou',   $types, $allowed));
+Assert::same('Documentation',  Resolver::matchType('cmd', 'doc',  $types, $allowed));
+Assert::same('Test / Review',  Resolver::matchType('cmd', 'test', $types, $allowed));
 
 // --- disallowed types are invisible to matching -----------------------------
 
 Assert::exception(
-    static fn() => Resolver::matchType('cmd', 'Installation', $types),
+    static fn() => Resolver::matchType('cmd', 'Installation', $types, $allowed),
     RuntimeException::class,
     "#unknown type 'Installation'#",
 );
 Assert::exception(
-    static fn() => Resolver::matchType('cmd', 'Investigation', $types),
+    static fn() => Resolver::matchType('cmd', 'Investigation', $types, $allowed),
     RuntimeException::class,
     "#unknown type 'Investigation'#",
 );
 Assert::exception(
-    static fn() => Resolver::matchType('cmd', 'inst', $types),
+    static fn() => Resolver::matchType('cmd', 'inst', $types, $allowed),
     RuntimeException::class,
     "#unknown type 'inst'#",
 );
 Assert::exception(
-    static fn() => Resolver::matchType('cmd', 'inv', $types),
+    static fn() => Resolver::matchType('cmd', 'inv', $types, $allowed),
     RuntimeException::class,
     "#unknown type 'inv'#",
 );
 Assert::exception(
-    static fn() => Resolver::matchType('cmd', 'internal', $types),
+    static fn() => Resolver::matchType('cmd', 'internal', $types, $allowed),
     RuntimeException::class,
     "#unknown type 'internal'#",
 );
 Assert::exception(
-    static fn() => Resolver::matchType('cmd', 'Čas na cestě', $types),
+    static fn() => Resolver::matchType('cmd', 'Čas na cestě', $types, $allowed),
     RuntimeException::class,
     "#unknown type 'Čas na cestě'#",
 );
@@ -94,7 +103,7 @@ Assert::exception(
 // --- unknown error lists allowed types only ---------------------------------
 
 Assert::exception(
-    static fn() => Resolver::matchType('day', 'xyz', $types),
+    static fn() => Resolver::matchType('day', 'xyz', $types, $allowed),
     RuntimeException::class,
     "#day: unknown type 'xyz'\\. Allowed: Implementation, Out of office, Documentation, Test / Review, Analyses / Design, Communication, Meetings, \\.\\.\\.#",
 );
@@ -102,12 +111,12 @@ Assert::exception(
 // --- cmd name surfaces in error messages ------------------------------------
 
 Assert::exception(
-    static fn() => Resolver::matchType('track', 'inv', $types),
+    static fn() => Resolver::matchType('track', 'inv', $types, $allowed),
     RuntimeException::class,
     "#^track: unknown type 'inv'#",
 );
 Assert::exception(
-    static fn() => Resolver::matchType('switch', 'inv', $types),
+    static fn() => Resolver::matchType('switch', 'inv', $types, $allowed),
     RuntimeException::class,
     "#^switch: unknown type 'inv'#",
 );

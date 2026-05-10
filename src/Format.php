@@ -3,7 +3,7 @@
 namespace Timeshit;
 
 use DateTimeImmutable;
-
+use Timeshit\Util\Ansi;
 use function array_keys;
 use function array_values;
 use function explode;
@@ -19,6 +19,12 @@ use function str_replace;
 
 final class Format
 {
+    /** Local record id rendered as `#N` in dim color, unpadded — callers pad with `sprintf` when a fixed-width column is needed. */
+    public static function recordId(int $id): string
+    {
+        return Ansi::lblack('#' . $id);
+    }
+
     public static function duration(string $startedAt, string $endedAt): string
     {
         $start = new DateTimeImmutable($startedAt);
@@ -49,13 +55,13 @@ final class Format
     public static function roles(array $roles): string
     {
         $order = [
-            'assignee' => 'a',
-            'commenter' => 'c',
-            'reporter' => 'r',
-            'updater' => 'u',
+            'assignee'   => 'a',
+            'commenter'  => 'c',
+            'reporter'   => 'r',
+            'updater'    => 'u',
             'workAuthor' => 'w',
-            'starred' => 's',
-            'mentioned' => 'm',
+            'starred'    => 's',
+            'mentioned'  => 'm',
         ];
         $mask = '';
         foreach ($order as $role => $letter) {
@@ -108,10 +114,10 @@ final class Format
 
         return match (true) {
             $first === 'Implementation' => Ansi::lgreen($padded),
-            $first === 'Test/Review' => Ansi::cyan($padded),
-            $first === 'Documentation' => Ansi::blue($padded),
-            $first === 'Communication' => Ansi::magenta($padded),
-            $first === 'Out of office' => Ansi::yellow($padded),
+            $first === 'Test/Review'    => Ansi::cyan($padded),
+            $first === 'Documentation'  => Ansi::blue($padded),
+            $first === 'Communication'  => Ansi::yellow($padded),
+            $first === 'Out of office'  => Ansi::magenta($padded),
             default => $padded,
         };
     }

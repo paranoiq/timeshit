@@ -2,11 +2,10 @@
 
 namespace Timeshit\View;
 
-use Timeshit\Ansi;
 use Timeshit\Format;
+use Timeshit\Util\Ansi;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\WorkItem;
-
 use function printf;
 use function rtrim;
 use function sprintf;

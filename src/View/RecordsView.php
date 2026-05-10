@@ -3,10 +3,9 @@
 namespace Timeshit\View;
 
 use DateTimeImmutable;
-use Timeshit\Ansi;
 use Timeshit\Format;
 use Timeshit\Local\Record;
-
+use Timeshit\Util\Ansi;
 use function date;
 use function intdiv;
 use function max;
@@ -100,7 +99,8 @@ final class RecordsView
                 Ansi::lblack($item->startTrigger) . Ansi::lblack(' → ') . $endTriggerColored,
                 28,
             );
-            $comment = $item->comment === '' ? '' : '  ' . Ansi::lblack($item->comment);
+            $commentText = $item->comment === '' ? '' : ' ' . Ansi::lblack($item->comment);
+            $comment = '  ' . Format::recordId($item->id) . $commentText;
             echo sprintf(
                 "    %s  %s  %s  %s  %s  %s%s\n",
                 Ansi::link($url, sprintf('%-12s', $item->issueId)),

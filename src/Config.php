@@ -15,10 +15,12 @@ final class Config
     private const CONFIG_FILE = '/config/config.neon';
     private const SECRETS_FILE = '/config/secrets.neon';
 
-    private function __construct(
+    /** @param list<string> $allowedTypes */
+    public function __construct(
         public readonly string $youtrackBaseUrl,
         public readonly string $youtrackToken,
         public readonly string $timezone,
+        public readonly array $allowedTypes,
     ) {}
 
     public static function load(string $rootDir): self
@@ -32,7 +34,7 @@ final class Config
             );
         }
 
-        return new self($cfg['youtrackBaseUrl'], $token, $cfg['timezone']);
+        return new self($cfg['youtrackBaseUrl'], $token, $cfg['timezone'], $cfg['allowedTypes']);
     }
 
     /**
@@ -45,24 +47,32 @@ final class Config
         return self::readConfig($rootDir)['timezone'];
     }
 
-    /** @return array{youtrackBaseUrl: string, timezone: string} */
+    /** @return array{youtrackBaseUrl: string, timezone: string, allowedTypes: list<string>} */
     private static function readConfig(string $rootDir): array
     {
-        $data = self::readNeon($rootDir . self::CONFIG_FILE);
+        $path = $rootDir . self::CONFIG_FILE;
+        $data = self::readNeon($path);
         $baseUrl = $data['youtrackBaseUrl'] ?? null;
         if (!is_string($baseUrl) || $baseUrl === '') {
-            throw new RuntimeException(
-                "Missing youtrackBaseUrl in {$rootDir}" . self::CONFIG_FILE,
-            );
+            throw new RuntimeException("Missing youtrackBaseUrl in {$path}");
         }
         $timezone = $data['timezone'] ?? null;
         if (!is_string($timezone) || $timezone === '') {
-            throw new RuntimeException(
-                "Missing timezone in {$rootDir}" . self::CONFIG_FILE,
-            );
+            throw new RuntimeException("Missing timezone in {$path}");
+        }
+        $allowedTypes = $data['allowedTypes'] ?? null;
+        if (!is_array($allowedTypes) || $allowedTypes === []) {
+            throw new RuntimeException("Missing or empty allowedTypes in {$path}");
+        }
+        $names = [];
+        foreach ($allowedTypes as $name) {
+            if (!is_string($name) || $name === '') {
+                throw new RuntimeException("Invalid allowedTypes entry in {$path} (expected non-empty strings)");
+            }
+            $names[] = $name;
         }
 
-        return ['youtrackBaseUrl' => $baseUrl, 'timezone' => $timezone];
+        return ['youtrackBaseUrl' => $baseUrl, 'timezone' => $timezone, 'allowedTypes' => $names];
     }
 
     /** @return array<string, mixed> */

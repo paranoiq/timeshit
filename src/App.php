@@ -5,41 +5,33 @@ namespace Timeshit;
 use Collator;
 use DateTimeImmutable;
 use Exception;
-use Nette\Neon\Neon;
 use RuntimeException;
 use Throwable;
+use Timeshit\Local\FileRecordStore;
 use Timeshit\Local\Record;
-use Timeshit\Local\Store;
+use Timeshit\Local\RecordStore;
+use Timeshit\Util\Ansi;
+use Timeshit\Util\Clock;
+use Timeshit\Util\Io;
+use Timeshit\Util\SystemClock;
 use Timeshit\View\AllView;
 use Timeshit\View\IssuesView;
 use Timeshit\View\RecordsView;
 use Timeshit\View\WorkView;
-use Timeshit\Youtrack\Issue;
+use Timeshit\Youtrack\CachedIssueDataProvider;
+use Timeshit\Youtrack\CachedTypeProvider;
 use Timeshit\Youtrack\IssueCache;
-use Timeshit\Youtrack\WorkItem;
+use Timeshit\Youtrack\IssueDataProvider;
+use Timeshit\Youtrack\TypeProvider;
 use Timeshit\Youtrack\WorkItemCache;
 use Timeshit\Youtrack\WorkItemType;
 use Timeshit\Youtrack\WorkItemTypeCache;
 use Timeshit\Youtrack\YoutrackClient;
-
 use function array_values;
 use function count;
-use function date;
 use function date_default_timezone_set;
-use function dirname;
-use function fgets;
-use function file_exists;
-use function file_get_contents;
-use function file_put_contents;
-use function fprintf;
-use function fwrite;
 use function in_array;
-use function is_array;
-use function is_dir;
-use function is_file;
-use function is_string;
 use function max;
-use function mkdir;
 use function rtrim;
 use function sprintf;
 use function str_repeat;
@@ -48,25 +40,54 @@ use function substr;
 use function trim;
 use function usort;
 
-use const STDERR;
-use const STDIN;
-
 final class App
 {
 
-    private const CONFIG_FILE = '/config/config.neon';
-    private const SECRETS_FILE = '/config/secrets.neon';
     private const ISSUES_CACHE_FILE = '/data/issues.neon';
     private const WORK_ITEMS_CACHE_FILE = '/data/work-items.neon';
     private const WORK_ITEM_TYPES_FILE = '/data/work-item-types.neon';
     private const RECORDS_FILE = '/data/records.neon';
 
-    private const DEFAULT_TIMEZONE = 'Europe/Prague';
-
     private const TRACK_DEFAULT_TYPE = 'Implementation';
     private const DAY_DEFAULT_TYPE = 'Out of office';
 
-    public function __construct(private readonly string $rootDir) {}
+    public function __construct(
+        private readonly Config $config,
+        private readonly RecordStore $store,
+        private readonly TypeProvider $types,
+        private readonly IssueDataProvider $issueData,
+        private readonly Clock $clock,
+        private readonly Io $io,
+        private readonly Configurator $configurator,
+    ) {}
+
+    /** Wires the file/network-backed implementations from a project root directory. */
+    public static function forRoot(string $rootDir, Config $config, Io $io): self
+    {
+        $client = new YoutrackClient($config->youtrackBaseUrl, $config->youtrackToken);
+        $types = new CachedTypeProvider(
+            new WorkItemTypeCache($rootDir . self::WORK_ITEM_TYPES_FILE),
+            $client,
+            $io,
+        );
+        $issueData = new CachedIssueDataProvider(
+            new IssueCache($rootDir . self::ISSUES_CACHE_FILE),
+            new WorkItemCache($rootDir . self::WORK_ITEMS_CACHE_FILE),
+            $client,
+            $io,
+            $config->youtrackBaseUrl,
+        );
+
+        return new self(
+            config: $config,
+            store: new FileRecordStore($rootDir . self::RECORDS_FILE),
+            types: $types,
+            issueData: $issueData,
+            clock: new SystemClock(),
+            io: $io,
+            configurator: new Configurator($rootDir, $io),
+        );
+    }
 
     private const COMMAND_NAMES = [
         'status', 'issues', 'pushed', 'local', 'all', 'types',
@@ -84,24 +105,12 @@ final class App
         $input = $argv[1] ?? null;
 
         if ($input === null || $input === '' || $input === '-h' || $input === '--help') {
-            $this->printHelp();
+            self::printHelp($this->io);
 
             return 0;
         }
 
-        if (!is_file($this->rootDir . self::SECRETS_FILE)) {
-            try {
-                $this->cmdConfigure();
-            } catch (Throwable $e) {
-                fwrite(STDERR, Ansi::red("Error: " . $e->getMessage()) . "\n");
-
-                return 1;
-            }
-
-            return 0;
-        }
-
-        date_default_timezone_set(Config::timezone($this->rootDir));
+        date_default_timezone_set($this->config->timezone);
 
         try {
             $resolved = Resolver::matchCommand($input, self::COMMAND_NAMES);
@@ -114,13 +123,13 @@ final class App
 
         try {
             match ($resolved) {
-                'help' => $this->printHelp(),
-                'issues' => $this->cmdIssues(Config::load($this->rootDir)),
-                'pushed' => $this->cmdPushed(Config::load($this->rootDir)),
-                'local' => $this->cmdLocal(Config::load($this->rootDir)),
-                'all' => $this->cmdAll(Config::load($this->rootDir)),
-                'status' => $this->cmdStatus(Config::load($this->rootDir)),
-                'refresh' => $this->cmdRefresh(Config::load($this->rootDir)),
+                'help' => self::printHelp($this->io),
+                'issues' => $this->cmdIssues(),
+                'pushed' => $this->cmdPushed(),
+                'local' => $this->cmdLocal(),
+                'all' => $this->cmdAll(),
+                'status' => $this->cmdStatus(),
+                'refresh' => $this->cmdRefresh(),
                 'track' => $this->cmdTrack($argv[2] ?? null, $argv[3] ?? null),
                 'day' => $this->cmdDay($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
                 'checkout' => $this->cmdCheckout($argv[2] ?? null, $argv[3] ?? null),
@@ -136,11 +145,11 @@ final class App
                 'at' => $this->cmdAt($argv[2] ?? null),
                 'before' => $this->cmdBefore($argv[2] ?? null),
                 'after' => $this->cmdAfter($argv[2] ?? null),
-                'configure' => $this->cmdConfigure(),
+                'configure' => $this->configurator->run(),
                 default => throw new RuntimeException("dispatch: no handler for resolved command '{$resolved}'"),
             };
         } catch (Throwable $e) {
-            fwrite(STDERR, Ansi::red("Error: " . $e->getMessage()) . "\n");
+            $this->io->err(Ansi::red("Error: " . $e->getMessage()) . "\n");
 
             return 1;
         }
@@ -150,19 +159,19 @@ final class App
 
     private function unknownCommand(string $command): never
     {
-        fwrite(STDERR, Ansi::red("Unknown command: {$command}") . "\n\n");
-        $this->printHelp();
+        $this->io->err(Ansi::red("Unknown command: {$command}") . "\n\n");
+        self::printHelp($this->io);
         exit(1);
     }
 
     private function ambiguousCommand(string $message): never
     {
-        fwrite(STDERR, Ansi::red($message) . "\n\n");
-        $this->printHelp();
+        $this->io->err(Ansi::red($message) . "\n\n");
+        self::printHelp($this->io);
         exit(1);
     }
 
-    private function printHelp(): void
+    public static function printHelp(Io $io): void
     {
         $cmd = static fn(string $name): string => Ansi::lgreen($name);
         $req = static fn(string $name): string => Ansi::yellow("<{$name}>");
@@ -227,50 +236,50 @@ final class App
             $argNameWidth = max($argNameWidth, Ansi::length($name));
         }
 
-        echo Ansi::lwhite('timeshit') . ' ' . Ansi::lblack('— personal time tracker for YouTrack + Git +  GitLab') . "\n\n";
-        echo "Usage: " . Ansi::lblue('timeshit.php') . " " . $cmd('command') . " " . $opt('args') . "\n\n";
+        $io->out(Ansi::lwhite('timeshit') . ' ' . Ansi::lblack('— personal time tracker for YouTrack + Git +  GitLab') . "\n\n");
+        $io->out("Usage: " . Ansi::lblue('timeshit.php') . " " . $cmd('command') . " " . $opt('args') . "\n\n");
         foreach ($groups as $title => $rows) {
-            echo Ansi::lwhite($title) . ":\n";
+            $io->out(Ansi::lwhite($title) . ":\n");
             foreach ($rows as [$name, $args, $desc]) {
-                echo "  " . $name . str_repeat(' ', $nameWidth - Ansi::length($name) + 2)
+                $io->out("  " . $name . str_repeat(' ', $nameWidth - Ansi::length($name) + 2)
                     . $args . str_repeat(' ', $argsWidth - Ansi::length($args) + 2)
-                    . $desc . "\n";
+                    . $desc . "\n");
             }
         }
-        echo "\n" . Ansi::lwhite('Arguments') . ":\n";
+        $io->out("\n" . Ansi::lwhite('Arguments') . ":\n");
         foreach ($argRows as [$name, $desc]) {
-            echo "  " . $name . str_repeat(' ', $argNameWidth - Ansi::length($name) + 2) . $desc . "\n";
+            $io->out("  " . $name . str_repeat(' ', $argNameWidth - Ansi::length($name) + 2) . $desc . "\n");
         }
     }
 
-    private function cmdIssues(Config $config): void
+    private function cmdIssues(): void
     {
-        $data = $this->loadOrFetch($config);
-        (new IssuesView($config->youtrackBaseUrl, $data['user']))->render($data['issues'], $data['workItems']);
+        $data = $this->issueData->loadOrFetch();
+        (new IssuesView($this->config->youtrackBaseUrl, $data['user']))->render($data['issues'], $data['workItems']);
     }
 
-    private function cmdPushed(Config $config): void
+    private function cmdPushed(): void
     {
-        $data = $this->loadOrFetch($config);
-        (new WorkView($config->youtrackBaseUrl))->render($data['workItems'], $data['issues']);
+        $data = $this->issueData->loadOrFetch();
+        (new WorkView($this->config->youtrackBaseUrl))->render($data['workItems'], $data['issues']);
     }
 
-    private function cmdLocal(Config $config): void
+    private function cmdLocal(): void
     {
-        $items = (new Store($this->rootDir . self::RECORDS_FILE))->load();
-        (new RecordsView($config->youtrackBaseUrl))->render($items, $this->loadIssueTitles());
+        $items = $this->store->load();
+        (new RecordsView($this->config->youtrackBaseUrl))->render($items, $this->issueData->titles());
     }
 
-    private function cmdAll(Config $config): void
+    private function cmdAll(): void
     {
-        $data = $this->loadOrFetch($config);
-        $records = (new Store($this->rootDir . self::RECORDS_FILE))->load();
-        (new AllView($config->youtrackBaseUrl))->render($data['workItems'], $records, $data['issues']);
+        $data = $this->issueData->loadOrFetch();
+        $records = $this->store->load();
+        (new AllView($this->config->youtrackBaseUrl))->render($data['workItems'], $records, $data['issues']);
     }
 
-    private function cmdStatus(Config $config): void
+    private function cmdStatus(): void
     {
-        $items = (new Store($this->rootDir . self::RECORDS_FILE))->load();
+        $items = $this->store->load();
         $active = null;
         $previous = null;
         for ($i = count($items) - 1; $i >= 0; $i--) {
@@ -288,33 +297,33 @@ final class App
             break;
         }
         if ($active === null && $previous === null) {
-            echo "No tracking records.\n";
+            $this->io->out("No tracking records.\n");
 
             return;
         }
-        $baseUrl = rtrim($config->youtrackBaseUrl, '/');
-        $titleByIssueId = $this->loadIssueTitles();
+        $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
+        $titleByIssueId = $this->issueData->titles();
         if ($active !== null) {
-            echo Ansi::lwhite('Active') . ":\n";
-            echo $this->statusLine($active, $baseUrl, $titleByIssueId) . "\n";
+            $this->io->out(Ansi::lwhite('Active') . ":\n");
+            $this->io->out($this->statusLine($active, $baseUrl, $titleByIssueId) . "\n");
         } else {
-            echo Ansi::lblack('No active record.') . "\n";
+            $this->io->out(Ansi::lblack('No active record.') . "\n");
         }
         if ($previous !== null) {
-            echo "\n" . Ansi::lwhite('Previous') . ":\n";
-            echo $this->statusLine($previous, $baseUrl, $titleByIssueId) . "\n";
+            $this->io->out("\n" . Ansi::lwhite('Previous') . ":\n");
+            $this->io->out($this->statusLine($previous, $baseUrl, $titleByIssueId) . "\n");
         }
     }
 
     /** @param array<string, string> $titleByIssueId */
     private function statusLine(Record $r, string $baseUrl, array $titleByIssueId): string
     {
-        $today = date('Y-m-d');
+        $today = $this->clock->now()->format('Y-m-d');
         $startDate = substr($r->startedAt, 0, 10);
         $startStr = $startDate === $today ? substr($r->startedAt, 11) : $r->startedAt;
 
         if ($r->endedAt === null) {
-            $now = date('Y-m-d H:i');
+            $now = $this->clock->nowMinute();
             $duration = Format::duration($r->startedAt, $now) . ' so far';
             $timeRange = $startStr . ' → ' . Ansi::lgreen('…');
         } else {
@@ -328,8 +337,9 @@ final class App
 
         $url = $baseUrl . '/issue/' . $r->issueId;
         $line = sprintf(
-            '  %s  %s  %s  %s',
+            '  %s %s  %s  %s  %s',
             Ansi::link($url, $r->issueId),
+            Format::recordId($r->id),
             Format::type($r->type),
             $timeRange,
             Ansi::lblack('(' . $duration . ')'),
@@ -348,24 +358,9 @@ final class App
         return $line;
     }
 
-    /** @return array<string, string> */
-    private function loadIssueTitles(): array
-    {
-        $titleByIssueId = [];
-        $issueCachePath = $this->rootDir . self::ISSUES_CACHE_FILE;
-        if (file_exists($issueCachePath)) {
-            $issuesData = (new IssueCache($issueCachePath))->load();
-            foreach ($issuesData['issues'] as $issue) {
-                $titleByIssueId[$issue->id] = $issue->title;
-            }
-        }
-
-        return $titleByIssueId;
-    }
-
     private function cmdTypes(): void
     {
-        $types = $this->loadOrFetchTypes();
+        $types = $this->types->types();
         $collator = new Collator('cs_CZ');
         $collator->setStrength(Collator::SECONDARY);
         usort($types, static function (WorkItemType $a, WorkItemType $b) use ($collator): int {
@@ -378,21 +373,21 @@ final class App
             $nameWidth = max($nameWidth, Ansi::length($t->name));
         }
         foreach ($types as $t) {
-            $name = in_array($t->name, Resolver::ALLOWED_TYPES, true) ? Ansi::lgreen($t->name) : $t->name;
-            echo $name . str_repeat(' ', $nameWidth - Ansi::length($name) + 2) . Ansi::lblack($t->id) . "\n";
+            $name = in_array($t->name, $this->config->allowedTypes, true) ? Ansi::lgreen($t->name) : $t->name;
+            $this->io->out($name . str_repeat(' ', $nameWidth - Ansi::length($name) + 2) . Ansi::lblack($t->id) . "\n");
         }
     }
 
-    private function cmdRefresh(Config $config): void
+    private function cmdRefresh(): void
     {
-        $this->fetchAndCache($config);
-        $this->fetchAndCacheTypes($config);
+        $this->issueData->refresh();
+        $this->types->refresh();
     }
 
     private function cmdType(?string $newType): void
     {
-        $matched = Resolver::resolveType('type', $newType, null, $this->loadOrFetchTypes(...));
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->changeOpenType($matched);
+        $matched = Resolver::resolveType('type', $newType, null, $this->types->types(...), $this->config->allowedTypes);
+        $result = $this->store->changeOpenType($matched, $this->clock->nowMinute());
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('type: no open tracking entry to update');
@@ -400,27 +395,27 @@ final class App
         if (!$result['changed']) {
             return;
         }
-        fprintf(
-            STDERR,
-            "Changed type of %s from %s to %s\n",
+        $this->io->err(sprintf(
+            "Changed type of %s %s from %s to %s\n",
             $item->issueId,
+            Format::recordId($item->id),
             (string) $result['previousType'],
             $matched,
-        );
+        ));
     }
 
     private function cmdSwitch(?string $newType): void
     {
-        $matched = Resolver::resolveType('switch', $newType, null, $this->loadOrFetchTypes(...));
-        $store = new Store($this->rootDir . self::RECORDS_FILE);
-        $items = $store->load();
+        $matched = Resolver::resolveType('switch', $newType, null, $this->types->types(...), $this->config->allowedTypes);
+        $items = $this->store->load();
         $last = $items === [] ? null : $items[count($items) - 1];
         if ($last === null || !$last->isOpen()) {
             throw new RuntimeException('switch: no open tracking entry');
         }
         $trigger = 'switched';
-        $now = date('Y-m-d H:i');
+        $now = $this->clock->nowMinute();
         $next = new Record(
+            id: $this->store->nextId(),
             issueId: $last->issueId,
             branch: $last->branch,
             repo: $last->repo,
@@ -432,69 +427,68 @@ final class App
             createdAt: $now,
             modifiedAt: $now,
         );
-        $result = $store->track($next, $trigger);
+        $result = $this->store->track($next, $trigger);
         if (!$result['started']) {
             return;
         }
         $stopped = $result['stopped'];
         if ($stopped !== null && $stopped->endedAt !== null) {
-            fprintf(
-                STDERR,
-                "Stopped %s (%s) after %s\n",
+            $this->io->err(sprintf(
+                "Stopped %s %s (%s) after %s\n",
                 $stopped->issueId,
+                Format::recordId($stopped->id),
                 $stopped->type,
                 Format::duration($stopped->startedAt, $stopped->endedAt),
-            );
+            ));
         }
         $onBranch = $next->branch === null ? '' : " ({$next->branch})";
         $inRepo = $next->repo === '' ? '' : " in {$next->repo}";
-        fprintf(STDERR, "Tracking %s%s%s as %s\n", $next->issueId, $onBranch, $inRepo, $matched);
+        $this->io->err(sprintf("Tracking %s %s%s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $inRepo, $matched));
     }
 
     private function cmdEnd(?string $comment): void
     {
         $resolved = $comment === '' ? null : $comment;
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->endOpen(date('Y-m-d H:i'), 'ended', $resolved);
+        $result = $this->store->endOpen($this->clock->nowMinute(), 'ended', $resolved);
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('end: no open tracking entry');
         }
         $endedAt = $item->endedAt ?? '';
-        fprintf(
-            STDERR,
-            "Stopped %s after %s\n",
+        $this->io->err(sprintf(
+            "Stopped %s %s after %s\n",
             $item->issueId,
+            Format::recordId($item->id),
             Format::duration($item->startedAt, $endedAt),
-        );
+        ));
         if ($item->comment !== '') {
-            fprintf(STDERR, "Comment: %s\n", $item->comment);
+            $this->io->err(sprintf("Comment: %s\n", $item->comment));
         }
     }
 
     private function cmdPause(?string $comment): void
     {
         $resolved = $comment === '' ? null : $comment;
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->endOpen(date('Y-m-d H:i'), 'paused', $resolved);
+        $result = $this->store->endOpen($this->clock->nowMinute(), 'paused', $resolved);
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('pause: no open tracking entry');
         }
         $endedAt = $item->endedAt ?? '';
-        fprintf(
-            STDERR,
-            "Paused %s after %s\n",
+        $this->io->err(sprintf(
+            "Paused %s %s after %s\n",
             $item->issueId,
+            Format::recordId($item->id),
             Format::duration($item->startedAt, $endedAt),
-        );
+        ));
         if ($item->comment !== '') {
-            fprintf(STDERR, "Comment: %s\n", $item->comment);
+            $this->io->err(sprintf("Comment: %s\n", $item->comment));
         }
     }
 
     private function cmdResume(?string $comment): void
     {
-        $store = new Store($this->rootDir . self::RECORDS_FILE);
-        $items = $store->load();
+        $items = $this->store->load();
         $last = $items === [] ? null : $items[count($items) - 1];
         if ($last === null) {
             throw new RuntimeException('resume: no record to resume');
@@ -502,8 +496,9 @@ final class App
         if ($last->isOpen()) {
             throw new RuntimeException('resume: a record is already open');
         }
-        $now = date('Y-m-d H:i');
+        $now = $this->clock->nowMinute();
         $next = new Record(
+            id: $this->store->nextId(),
             issueId: $last->issueId,
             branch: $last->branch,
             repo: $last->repo,
@@ -516,11 +511,11 @@ final class App
             modifiedAt: $now,
             comment: $comment ?? '',
         );
-        $store->track($next, 'resumed');
+        $this->store->track($next, 'resumed');
         $onBranch = $next->branch === null ? '' : " ({$next->branch})";
-        fprintf(STDERR, "Resumed %s%s as %s\n", $next->issueId, $onBranch, $next->type);
+        $this->io->err(sprintf("Resumed %s %s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $next->type));
         if ($next->comment !== '') {
-            fprintf(STDERR, "Comment: %s\n", $next->comment);
+            $this->io->err(sprintf("Comment: %s\n", $next->comment));
         }
     }
 
@@ -528,15 +523,17 @@ final class App
     {
         $offsetMin = Resolver::parseOffset('skip', $offset);
 
-        $store = new Store($this->rootDir . self::RECORDS_FILE);
-        $items = $store->load();
+        $items = $this->store->load();
         $last = $items === [] ? null : $items[count($items) - 1];
         if ($last === null || !$last->isOpen()) {
             throw new RuntimeException('skip: no open tracking entry');
         }
 
-        $nowDt = new DateTimeImmutable();
+        $nowDt = $this->clock->now();
         $endDt = $nowDt->modify("-{$offsetMin} minutes");
+        if ($endDt === false) {
+            throw new RuntimeException("skip: invalid offset");
+        }
         try {
             $startDt = new DateTimeImmutable($last->startedAt);
         } catch (Exception) {
@@ -551,6 +548,7 @@ final class App
 
         $closed = $last->withEnd($endedAt, 'skipped', $now);
         $next = new Record(
+            id: $this->store->nextId(),
             issueId: $last->issueId,
             branch: $last->branch,
             repo: $last->repo,
@@ -565,33 +563,35 @@ final class App
 
         $items[count($items) - 1] = $closed;
         $items[] = $next;
-        $store->save($items);
+        $this->store->save($items);
 
-        fprintf(
-            STDERR,
-            "Skipped %s of %s: ended at %s, restarted at %s\n",
+        $this->io->err(sprintf(
+            "Skipped %s of %s %s: ended at %s, restarted at %s\n",
             Format::duration($endedAt, $now),
             $last->issueId,
+            Format::recordId($last->id),
             $endedAt,
             $now,
-        );
+        ));
     }
 
     private function cmdSteal(?string $issue, ?string $offset, ?string $type): void
     {
         $issueId = Resolver::requireIssueId('steal', $issue);
         $offsetMin = Resolver::parseOffset('steal', $offset);
-        $resolvedType = Resolver::resolveType('steal', $type, self::TRACK_DEFAULT_TYPE, $this->loadOrFetchTypes(...));
+        $resolvedType = Resolver::resolveType('steal', $type, self::TRACK_DEFAULT_TYPE, $this->types->types(...), $this->config->allowedTypes);
 
-        $store = new Store($this->rootDir . self::RECORDS_FILE);
-        $items = $store->load();
+        $items = $this->store->load();
         $last = $items === [] ? null : $items[count($items) - 1];
         if ($last === null || !$last->isOpen()) {
             throw new RuntimeException('steal: no open tracking entry');
         }
 
-        $nowDt = new DateTimeImmutable();
+        $nowDt = $this->clock->now();
         $splitDt = $nowDt->modify("-{$offsetMin} minutes");
+        if ($splitDt === false) {
+            throw new RuntimeException("steal: invalid offset");
+        }
         try {
             $startDt = new DateTimeImmutable($last->startedAt);
         } catch (Exception) {
@@ -606,6 +606,7 @@ final class App
 
         $closed = $last->withEnd($splitAt, 'stolen', $now);
         $stolen = new Record(
+            id: $this->store->nextId(),
             issueId: $issueId,
             branch: null,
             repo: '',
@@ -618,6 +619,7 @@ final class App
             modifiedAt: $now,
         );
         $continuation = new Record(
+            id: $this->store->nextId(),
             issueId: $last->issueId,
             branch: $last->branch,
             repo: $last->repo,
@@ -633,18 +635,19 @@ final class App
         $items[count($items) - 1] = $closed;
         $items[] = $stolen;
         $items[] = $continuation;
-        $store->save($items);
+        $this->store->save($items);
 
-        fprintf(
-            STDERR,
-            "Stole %s of %s (%s) from %s between %s and %s\n",
+        $this->io->err(sprintf(
+            "Stole %s of %s %s (%s) from %s %s between %s and %s\n",
             Format::duration($splitAt, $now),
             $issueId,
+            Format::recordId($stolen->id),
             $resolvedType,
             $last->issueId,
+            Format::recordId($last->id),
             substr($splitAt, 11),
             substr($now, 11),
-        );
+        ));
     }
 
     private function cmdComment(?string $comment): void
@@ -652,7 +655,7 @@ final class App
         if ($comment === null || $comment === '') {
             throw new RuntimeException('comment: missing <text>');
         }
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->commentLast($comment);
+        $result = $this->store->commentLast($comment, $this->clock->nowMinute());
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('comment: no record to comment on');
@@ -661,13 +664,13 @@ final class App
             return;
         }
         $where = $item->isOpen() ? 'active' : 'last closed';
-        fprintf(STDERR, "Comment on %s (%s): %s\n", $item->issueId, $where, $item->comment);
+        $this->io->err(sprintf("Comment on %s %s (%s): %s\n", $item->issueId, Format::recordId($item->id), $where, $item->comment));
     }
 
     private function cmdTrack(?string $issue, ?string $type): void
     {
         $issueId = Resolver::requireIssueId('track', $issue);
-        $resolvedType = Resolver::resolveType('track', $type, self::TRACK_DEFAULT_TYPE, $this->loadOrFetchTypes(...));
+        $resolvedType = Resolver::resolveType('track', $type, self::TRACK_DEFAULT_TYPE, $this->types->types(...), $this->config->allowedTypes);
         $this->startRecord($issueId, null, '', $resolvedType, 'manual');
     }
 
@@ -675,10 +678,9 @@ final class App
     {
         $issueId = Resolver::requireIssueId('day', $issue);
         $when = Resolver::resolveDate($date);
-        $resolvedType = Resolver::resolveType('day', $type, self::DAY_DEFAULT_TYPE, $this->loadOrFetchTypes(...));
-        $store = new Store($this->rootDir . self::RECORDS_FILE);
+        $resolvedType = Resolver::resolveType('day', $type, self::DAY_DEFAULT_TYPE, $this->types->types(...), $this->config->allowedTypes);
         $dayKey = $when->format('Y-m-d');
-        foreach ($store->load() as $existing) {
+        foreach ($this->store->load() as $existing) {
             if ($existing->startTrigger !== 'day') {
                 continue;
             }
@@ -690,8 +692,9 @@ final class App
         }
         $start = $when->setTime(9, 0);
         $end = $when->setTime(17, 0);
-        $now = date('Y-m-d H:i');
+        $now = $this->clock->nowMinute();
         $record = new Record(
+            id: $this->store->nextId(),
             issueId: $issueId,
             branch: null,
             repo: '',
@@ -703,14 +706,14 @@ final class App
             createdAt: $now,
             modifiedAt: $now,
         );
-        $store->appendClosed($record);
-        fprintf(
-            STDERR,
-            "Logged %s for %s as %s (8h)\n",
+        $this->store->appendClosed($record);
+        $this->io->err(sprintf(
+            "Logged %s %s for %s as %s (8h)\n",
             $issueId,
+            Format::recordId($record->id),
             $dayKey,
             $resolvedType,
-        );
+        ));
     }
 
     private function cmdCheckout(?string $branch, ?string $repo): void
@@ -727,8 +730,9 @@ final class App
     private function startRecord(string $issueId, ?string $branch, string $repo, ?string $type, string $trigger): void
     {
         $resolvedType = $type === null || $type === '' ? self::TRACK_DEFAULT_TYPE : $type;
-        $now = date('Y-m-d H:i');
+        $now = $this->clock->nowMinute();
         $next = new Record(
+            id: $this->store->nextId(),
             issueId: $issueId,
             branch: $branch,
             repo: $repo,
@@ -740,22 +744,22 @@ final class App
             createdAt: $now,
             modifiedAt: $now,
         );
-        $result = (new Store($this->rootDir . self::RECORDS_FILE))->track($next, $trigger);
+        $result = $this->store->track($next, $trigger);
         if (!$result['started']) {
             return;
         }
         $stopped = $result['stopped'];
         if ($stopped !== null && $stopped->endedAt !== null) {
-            fprintf(
-                STDERR,
-                "Stopped %s after %s\n",
+            $this->io->err(sprintf(
+                "Stopped %s %s after %s\n",
                 $stopped->issueId,
+                Format::recordId($stopped->id),
                 Format::duration($stopped->startedAt, $stopped->endedAt),
-            );
+            ));
         }
         $onBranch = $branch === null ? '' : " ({$branch})";
         $inRepo = $repo === '' ? '' : " in {$repo}";
-        fprintf(STDERR, "Tracking %s%s%s as %s\n", $next->issueId, $onBranch, $inRepo, $resolvedType);
+        $this->io->err(sprintf("Tracking %s %s%s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $inRepo, $resolvedType));
     }
 
     private function cmdAt(?string $time): void
@@ -775,8 +779,7 @@ final class App
 
     private function modifyTimes(string $cmd, string $mode, ?string $arg): void
     {
-        $store = new Store($this->rootDir . self::RECORDS_FILE);
-        $items = $store->load();
+        $items = $this->store->load();
 
         $targetIndex = null;
         for ($i = count($items) - 1; $i >= 0; $i--) {
@@ -816,17 +819,21 @@ final class App
                 throw new RuntimeException("{$cmd}: invalid existing time '{$existing}'");
             }
             $sign = $mode === 'sub' ? '-' : '+';
-            $newDt = $existingDt->modify("{$sign}{$offsetMin} minutes");
+            $modified = $existingDt->modify("{$sign}{$offsetMin} minutes");
+            if ($modified === false) {
+                throw new RuntimeException("{$cmd}: invalid offset");
+            }
+            $newDt = $modified;
         }
         $newValue = $newDt->format('Y-m-d H:i');
 
         if ($newValue === $existing) {
-            fwrite(STDERR, "No change.\n");
+            $this->io->err("No change.\n");
 
             return;
         }
 
-        $modifiedAt = date('Y-m-d H:i');
+        $modifiedAt = $this->clock->nowMinute();
         $newItems = $items;
         $adjustedPrevIndex = null;
 
@@ -871,31 +878,31 @@ final class App
         }
 
         $firstShownIndex = $adjustedPrevIndex ?? $targetIndex;
-        fwrite(STDERR, Ansi::lwhite('Old:') . "\n");
+        $this->io->err(Ansi::lwhite('Old:') . "\n");
         for ($i = $firstShownIndex; $i <= $targetIndex; $i++) {
-            fwrite(STDERR, $this->recordLine($items[$i]) . "\n");
+            $this->io->err($this->recordLine($items[$i]) . "\n");
         }
-        fwrite(STDERR, "\n" . Ansi::lwhite('New:') . "\n");
+        $this->io->err("\n" . Ansi::lwhite('New:') . "\n");
         for ($i = $firstShownIndex; $i <= $targetIndex; $i++) {
-            fwrite(STDERR, $this->recordLine($newItems[$i]) . "\n");
+            $this->io->err($this->recordLine($newItems[$i]) . "\n");
         }
-        fwrite(STDERR, "\n");
+        $this->io->err("\n");
 
         if (!$this->confirm('Apply?')) {
-            fwrite(STDERR, "Cancelled.\n");
+            $this->io->err("Cancelled.\n");
 
             return;
         }
 
-        $store->save(array_values($newItems));
-        fwrite(STDERR, "Saved.\n");
+        $this->store->save(array_values($newItems));
+        $this->io->err("Saved.\n");
     }
 
     private function recordLine(Record $r): string
     {
         $start = substr($r->startedAt, 11);
         if ($r->endedAt === null) {
-            $now = date('Y-m-d H:i');
+            $now = $this->clock->nowMinute();
             $duration = Format::duration($r->startedAt, $now) . ' so far';
             $end = '  ...';
         } else {
@@ -904,8 +911,9 @@ final class App
         }
 
         return sprintf(
-            '  %-9s  %-22s  %s → %-5s  (%s)',
+            '  %-9s %s  %-22s  %s → %-5s  (%s)',
             $r->issueId,
+            Format::recordId($r->id),
             $r->type,
             $start,
             $end,
@@ -915,195 +923,13 @@ final class App
 
     private function confirm(string $question): bool
     {
-        fwrite(STDERR, "{$question} [y/N]: ");
-        $line = fgets(STDIN);
-        if ($line === false) {
+        $this->io->err("{$question} [y/N]: ");
+        $line = $this->io->readLine();
+        if ($line === null) {
             return false;
         }
 
         return in_array(strtolower(trim($line)), ['y', 'yes'], true);
-    }
-
-    private function cmdConfigure(): void
-    {
-        $configPath = $this->rootDir . self::CONFIG_FILE;
-        $secretsPath = $this->rootDir . self::SECRETS_FILE;
-
-        $existingBaseUrl = '';
-        $existingTimezone = '';
-        if (is_file($configPath)) {
-            $cfg = $this->readNeonFile($configPath);
-            $bu = $cfg['youtrackBaseUrl'] ?? null;
-            if (is_string($bu)) {
-                $existingBaseUrl = $bu;
-            }
-            $tz = $cfg['timezone'] ?? null;
-            if (is_string($tz)) {
-                $existingTimezone = $tz;
-            }
-        }
-
-        $existingToken = '';
-        if (is_file($secretsPath)) {
-            $secrets = $this->readNeonFile($secretsPath);
-            $tok = $secrets['youtrackToken'] ?? null;
-            if (is_string($tok)) {
-                $existingToken = $tok;
-            }
-        }
-
-        fwrite(STDERR, Ansi::lwhite('Configuring timeshit') . "\n\n");
-
-        $baseUrl = $this->prompt('YouTrack base URL', $existingBaseUrl);
-        if ($baseUrl === '') {
-            throw new RuntimeException('configure: YouTrack base URL is required');
-        }
-
-        $timezone = $this->prompt('Timezone', $existingTimezone === '' ? self::DEFAULT_TIMEZONE : $existingTimezone);
-        if ($timezone === '') {
-            throw new RuntimeException('configure: timezone is required');
-        }
-
-        $tokenHint = $existingToken === '' ? '' : ' [press Enter to keep existing]';
-        fwrite(STDERR, "YouTrack token{$tokenHint}: ");
-        $line = fgets(STDIN);
-        if ($line === false) {
-            throw new RuntimeException('configure: failed to read input');
-        }
-        $token = trim($line);
-        if ($token === '') {
-            $token = $existingToken;
-        }
-        if ($token === '') {
-            throw new RuntimeException('configure: YouTrack token is required');
-        }
-
-        $configDir = dirname($configPath);
-        if (!is_dir($configDir) && !mkdir($configDir, 0755, true) && !is_dir($configDir)) {
-            throw new RuntimeException("configure: failed to create {$configDir}");
-        }
-
-        $configContents = Neon::encode(
-            ['youtrackBaseUrl' => $baseUrl, 'timezone' => $timezone],
-            Neon::BLOCK,
-        );
-        if (file_put_contents($configPath, $configContents) === false) {
-            throw new RuntimeException("configure: failed to write {$configPath}");
-        }
-        fprintf(STDERR, "\nWrote %s\n", $configPath);
-
-        $secretsContents = Neon::encode(
-            ['youtrackToken' => $token],
-            Neon::BLOCK,
-        );
-        if (file_put_contents($secretsPath, $secretsContents) === false) {
-            throw new RuntimeException("configure: failed to write {$secretsPath}");
-        }
-        fprintf(STDERR, "Wrote %s\n", $secretsPath);
-    }
-
-    private function prompt(string $label, string $default): string
-    {
-        $hint = $default === '' ? '' : " [{$default}]";
-        fwrite(STDERR, "{$label}{$hint}: ");
-        $line = fgets(STDIN);
-        if ($line === false) {
-            throw new RuntimeException('configure: failed to read input');
-        }
-        $trimmed = trim($line);
-
-        return $trimmed === '' ? $default : $trimmed;
-    }
-
-    /** @return array<string, mixed> */
-    private function readNeonFile(string $path): array
-    {
-        $raw = file_get_contents($path);
-        if ($raw === false) {
-            return [];
-        }
-        $decoded = Neon::decode($raw);
-
-        return is_array($decoded) ? $decoded : [];
-    }
-
-    /** @return list<WorkItemType> */
-    private function loadOrFetchTypes(): array
-    {
-        $cache = new WorkItemTypeCache($this->rootDir . self::WORK_ITEM_TYPES_FILE);
-        if ($cache->isFresh()) {
-            return $cache->load();
-        }
-        $this->fetchAndCacheTypes(Config::load($this->rootDir));
-
-        return $cache->load();
-    }
-
-    private function fetchAndCacheTypes(Config $config): void
-    {
-        $cache = new WorkItemTypeCache($this->rootDir . self::WORK_ITEM_TYPES_FILE);
-        $client = new YoutrackClient($config->youtrackBaseUrl, $config->youtrackToken);
-        $types = $client->fetchWorkItemTypes();
-        $cache->save($types);
-        fprintf(STDERR, "Cached %d work item types\n", count($types));
-    }
-
-    /** @return array{user: string, issues: list<Issue>, workItems: list<WorkItem>} */
-    private function loadOrFetch(Config $config): array
-    {
-        $issueCache = new IssueCache($this->rootDir . self::ISSUES_CACHE_FILE);
-        $workItemCache = new WorkItemCache($this->rootDir . self::WORK_ITEMS_CACHE_FILE);
-        if ($issueCache->isFresh() && $workItemCache->isFresh()) {
-            $issuesData = $issueCache->load();
-            $workItemsData = $workItemCache->load();
-            fprintf(
-                STDERR,
-                "Loaded %d issues and %d work items from cache (use 'refresh' to force update)\n\n",
-                count($issuesData['issues']),
-                count($workItemsData['items']),
-            );
-
-            return [
-                'user' => $issuesData['user'],
-                'issues' => $issuesData['issues'],
-                'workItems' => $workItemsData['items'],
-            ];
-        }
-
-        return $this->fetchAndCache($config);
-    }
-
-    /** @return array{user: string, issues: list<Issue>, workItems: list<WorkItem>} */
-    private function fetchAndCache(Config $config): array
-    {
-        $issueCache = new IssueCache($this->rootDir . self::ISSUES_CACHE_FILE);
-        $workItemCache = new WorkItemCache($this->rootDir . self::WORK_ITEMS_CACHE_FILE);
-        $client = new YoutrackClient($config->youtrackBaseUrl, $config->youtrackToken);
-
-        $me = $client->me();
-        fprintf(
-            STDERR,
-            "Connected to %s as %s (%s)\n",
-            $config->youtrackBaseUrl,
-            $me['fullName'],
-            $me['login'],
-        );
-
-        $data = $client->fetchMine();
-        $issueCache->save($me['login'], $data['issues']);
-        $workItemCache->save($me['login'], $data['workItems']);
-        fprintf(
-            STDERR,
-            "Cached %d issues and %d work items\n",
-            count($data['issues']),
-            count($data['workItems']),
-        );
-
-        return [
-            'user' => $me['login'],
-            'issues' => $data['issues'],
-            'workItems' => $data['workItems'],
-        ];
     }
 
 }

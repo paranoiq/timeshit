@@ -26,6 +26,7 @@
     },
     "scripts": {
         "ps": "vendor/bin/phpstan analyse | php ../../../flowbox/flowbox-laravel/tooling/phpstan-tweak.php",
-        "t": "vendor/bin/tester tests"
+        "t": "vendor/bin/tester tests",
+        "tc": "vendor/bin/tester tests --coverage coverage.html --coverage-src src"
     }
 }
