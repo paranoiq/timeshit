@@ -68,24 +68,24 @@ final class Resolver
      * into a strictly positive number of minutes. Components must appear in
      * `d h m` order (any subset). Whitespace is ignored, case is ignored.
      */
-    public static function parseOffset(string $cmd, ?string $input): int
+    public static function parseSpan(string $cmd, ?string $input): int
     {
         if ($input === null || $input === '') {
-            throw new RuntimeException("{$cmd}: missing <offset>");
+            throw new RuntimeException("{$cmd}: missing <span>");
         }
         $cleaned = preg_replace('/\s+/', '', $input);
         if ($cleaned === null || $cleaned === '') {
-            throw new RuntimeException("{$cmd}: invalid offset '{$input}' (expected e.g. '1h 20m')");
+            throw new RuntimeException("{$cmd}: invalid span '{$input}' (expected e.g. '1h 20m')");
         }
         if (preg_match('/^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/i', $cleaned, $m) !== 1) {
-            throw new RuntimeException("{$cmd}: invalid offset '{$input}' (expected e.g. '1h 20m')");
+            throw new RuntimeException("{$cmd}: invalid span '{$input}' (expected e.g. '1h 20m')");
         }
         $days = (int) ($m[1] ?? '');
         $hours = (int) ($m[2] ?? '');
         $mins = (int) ($m[3] ?? '');
         $total = $days * 24 * 60 + $hours * 60 + $mins;
         if ($total <= 0) {
-            throw new RuntimeException("{$cmd}: invalid offset '{$input}' (must be > 0)");
+            throw new RuntimeException("{$cmd}: invalid span '{$input}' (must be > 0)");
         }
 
         return $total;

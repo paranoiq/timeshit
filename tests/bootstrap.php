@@ -30,10 +30,13 @@ function newApp(
     array $typeNames = ['Implementation', 'Test / Review', 'Documentation', 'Out of office', 'Analyses / Design', 'Communication, Meetings, ...'],
 ): array {
     $config = new Config(
-        'https://example.youtrack.cloud',
-        'fake-token',
-        'Europe/Prague',
-        ['Implementation', 'Test / Review', 'Documentation', 'Out of office', 'Analyses / Design', 'Communication, Meetings, ...'],
+        youtrackBaseUrl: 'https://example.youtrack.cloud',
+        youtrackToken: 'fake-token',
+        timezone: 'Europe/Prague',
+        allowedTypes: ['Implementation', 'Test / Review', 'Documentation', 'Out of office', 'Analyses / Design', 'Communication, Meetings, ...'],
+        defaultTrackType: 'Implementation',
+        defaultDayType: 'Out of office',
+        interruptionTypes: ['Communication, Meetings, ...', 'Test / Review'],
     );
     $store = new InMemoryRecordStore($records);
     $clock = new FixedClock($now);

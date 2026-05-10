@@ -89,6 +89,9 @@ final class InMemoryRecordStore implements RecordStore
                 return ['started' => false, 'stopped' => null];
             }
             $stopped = $last->withEnd($next->startedAt, $endTrigger, $next->createdAt);
+            if (self::pausesViaTrigger($endTrigger)) {
+                $stopped = $stopped->withStatus('paused', $next->createdAt);
+            }
             $items[] = $stopped;
         } elseif ($last !== null) {
             $items[] = $last;
@@ -129,6 +132,9 @@ final class InMemoryRecordStore implements RecordStore
         $closed = $appendComment === null
             ? $last->withEnd($endedAt, $endTrigger, $endedAt)
             : $last->withEnd($endedAt, $endTrigger, $endedAt, self::mergeComment($last->comment, $appendComment));
+        if (self::pausesViaTrigger($endTrigger)) {
+            $closed = $closed->withStatus('paused', $endedAt);
+        }
         $items[] = $closed;
         $this->items = $items;
 
@@ -171,5 +177,11 @@ final class InMemoryRecordStore implements RecordStore
         }
 
         return $existing . ' | ' . $more;
+    }
+
+    /** True when an end-trigger leaves the closed record in a pause state. */
+    private static function pausesViaTrigger(string $endTrigger): bool
+    {
+        return $endTrigger === 'paused' || $endTrigger === 'interrupted';
     }
 }

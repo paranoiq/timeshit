@@ -25,6 +25,13 @@ final class Ansi
     public static function lcyan(string $text): string    { return self::wrap(96, $text); }
     public static function lwhite(string $text): string   { return self::wrap(97, $text); }
 
+    /**
+     * Underline marker. Uses `\e[24m` (underline-off) instead of the global
+     * reset so this composes inside other color wrappers without dropping the
+     * outer color when the underlined span ends.
+     */
+    public static function underline(string $text): string { return "\e[4m{$text}\e[24m"; }
+
     public static function link(string $url, string $text): string
     {
         return "\e]8;;{$url}\e\\{$text}\e]8;;\e\\";

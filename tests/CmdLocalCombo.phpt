@@ -9,28 +9,39 @@ Environment::setup();
 
 // === combination scenario 1: track → pause → resume → end ===
 //
-// Two open segments on the same issue, separated by a pause, joined back by
-// resume, then closed. Yields two records: the paused segment and the
-// resumed-then-ended segment.
+// Two segments on the same issue, separated by an untracked break record
+// produced by `pause`. Resume closes the break and opens a fresh segment
+// cloned from the paused tracking record; end closes that segment.
+// Yields three records: paused tracking, closed break, ended-resumed segment.
 [$app, $store, $clock] = newApp('2026-05-09 09:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+1 hour');             // 10:00
 $app->run(['ts', 'pause']);
-$clock->advance('+30 minutes');         // 10:30 (gap)
+$clock->advance('+30 minutes');         // 10:30
 $app->run(['ts', 'resume']);
 $clock->advance('+45 minutes');         // 11:15
 $app->run(['ts', 'end']);
 $items = $store->load();
-Assert::count(2, $items);
+Assert::count(3, $items);
+// 1. paused tracking
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('2026-05-09 09:00', $items[0]->startedAt);
 Assert::same('2026-05-09 10:00', $items[0]->endedAt);
 Assert::same('paused', $items[0]->endTrigger);
-Assert::same('ABC-1', $items[1]->issueId);
-Assert::same('2026-05-09 10:30', $items[1]->startedAt);
-Assert::same('resumed', $items[1]->startTrigger);
-Assert::same('2026-05-09 11:15', $items[1]->endedAt);
-Assert::same('ended', $items[1]->endTrigger);
+Assert::same('paused', $items[0]->status);
+// 2. break — opened by pause, closed by resume
+Assert::same('', $items[1]->issueId);
+Assert::same('untracked', $items[1]->status);
+Assert::same('paused', $items[1]->startTrigger);
+Assert::same('2026-05-09 10:00', $items[1]->startedAt);
+Assert::same('2026-05-09 10:30', $items[1]->endedAt);
+Assert::same('resumed', $items[1]->endTrigger);
+// 3. resumed segment — cloned from ABC-1, closed by end
+Assert::same('ABC-1', $items[2]->issueId);
+Assert::same('2026-05-09 10:30', $items[2]->startedAt);
+Assert::same('resumed', $items[2]->startTrigger);
+Assert::same('2026-05-09 11:15', $items[2]->endedAt);
+Assert::same('ended', $items[2]->endTrigger);
 
 
 // === combination scenario 2: track → switch type → end (multi-type segments) ===
@@ -90,16 +101,16 @@ Assert::same('design note', $items[0]->comment);
 Assert::same('', $items[1]->comment);
 
 
-// === combination scenario 5: track → steal → end — interruption flow ===
+// === combination scenario 5: track → grab → end — interruption flow ===
 //
 // User forgot to track an interruption: they were on ABC-1 from 09:00, but
-// 20 minutes ago jumped to XYZ-9 instead. `steal` reconstructs all three
+// 20 minutes ago jumped to XYZ-9 instead. `grab` reconstructs all three
 // segments, then `end` closes the resumed continuation.
 [$app, $store, $clock] = newApp('2026-05-09 09:00');
 $app->run(['ts', 'track', 'ABC-1']);
-$clock->advance('+1 hour');                 // 10:00
-$app->run(['ts', 'steal', 'XYZ-9', '20m']); // 09:40 split, XYZ-9 till 10:00, ABC-1 continues
-$clock->advance('+15 minutes');             // 10:15
+$clock->advance('+1 hour');                // 10:00
+$app->run(['ts', 'grab', 'XYZ-9', '20m']); // 09:40 split, XYZ-9 till 10:00, ABC-1 continues
+$clock->advance('+15 minutes');            // 10:15
 $app->run(['ts', 'end']);
 $items = $store->load();
 Assert::count(3, $items);
@@ -107,8 +118,8 @@ Assert::count(3, $items);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('2026-05-09 09:00', $items[0]->startedAt);
 Assert::same('2026-05-09 09:40', $items[0]->endedAt);
-Assert::same('stolen', $items[0]->endTrigger);
-// stolen middle
+Assert::same('grabbed', $items[0]->endTrigger);
+// grabbed middle
 Assert::same('XYZ-9', $items[1]->issueId);
 Assert::same('2026-05-09 09:40', $items[1]->startedAt);
 Assert::same('2026-05-09 10:00', $items[1]->endedAt);

@@ -9,7 +9,7 @@ interface RecordStore
 
     /**
      * Next auto-increment id for a freshly-created record. When a single
-     * command writes multiple records in one transaction (e.g. `steal`),
+     * command writes multiple records in one transaction (e.g. `grab`),
      * the caller obtains the base id once and uses `id`, `id+1`, ... — no
      * mid-transaction persistence needed.
      */

@@ -32,9 +32,13 @@ use function count;
 use function date_default_timezone_set;
 use function in_array;
 use function max;
+use function mb_strlen;
+use function mb_strtolower;
+use function mb_substr;
 use function rtrim;
 use function sprintf;
 use function str_repeat;
+use function str_starts_with;
 use function strtolower;
 use function substr;
 use function trim;
@@ -47,9 +51,6 @@ final class App
     private const WORK_ITEMS_CACHE_FILE = '/data/work-items.neon';
     private const WORK_ITEM_TYPES_FILE = '/data/work-item-types.neon';
     private const RECORDS_FILE = '/data/records.neon';
-
-    private const TRACK_DEFAULT_TYPE = 'Implementation';
-    private const DAY_DEFAULT_TYPE = 'Out of office';
 
     public function __construct(
         private readonly Config $config,
@@ -90,12 +91,12 @@ final class App
     }
 
     private const COMMAND_NAMES = [
-        'status', 'issues', 'pushed', 'local', 'all', 'types',
-        'track', 'day', 'type', 'switch',
-        'pause', 'resume', 'skip', 'steal', 'end', 'comment', 'refresh',
+        'status', 'issues', 'pushed', 'local', 'all', //'types',
+        'track', 'interrupt', 'day', 'type', 'switch',
+        'pause', 'resume', 'skip', 'grab', 'end', 'done', 'comment', 'refresh',
         'at', 'before', 'after',
         'checkout',
-        'configure',
+        //'configure',
         'help',
     ];
 
@@ -105,7 +106,7 @@ final class App
         $input = $argv[1] ?? null;
 
         if ($input === null || $input === '' || $input === '-h' || $input === '--help') {
-            self::printHelp($this->io);
+            self::printHelp($this->io, $this->config);
 
             return 0;
         }
@@ -123,7 +124,7 @@ final class App
 
         try {
             match ($resolved) {
-                'help' => self::printHelp($this->io),
+                'help' => self::printHelp($this->io, $this->config),
                 'issues' => $this->cmdIssues(),
                 'pushed' => $this->cmdPushed(),
                 'local' => $this->cmdLocal(),
@@ -131,6 +132,7 @@ final class App
                 'status' => $this->cmdStatus(),
                 'refresh' => $this->cmdRefresh(),
                 'track' => $this->cmdTrack($argv[2] ?? null, $argv[3] ?? null),
+                'interrupt' => $this->cmdInterrupt($argv[2] ?? null, $argv[3] ?? null),
                 'day' => $this->cmdDay($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
                 'checkout' => $this->cmdCheckout($argv[2] ?? null, $argv[3] ?? null),
                 'type' => $this->cmdType($argv[2] ?? null),
@@ -139,8 +141,9 @@ final class App
                 'pause' => $this->cmdPause(Resolver::restArgs($argv)),
                 'resume' => $this->cmdResume(Resolver::restArgs($argv)),
                 'skip' => $this->cmdSkip($argv[2] ?? null),
-                'steal' => $this->cmdSteal($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
+                'grab' => $this->cmdGrab($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
                 'end' => $this->cmdEnd(Resolver::restArgs($argv)),
+                'done' => $this->cmdDone(Resolver::restArgs($argv)),
                 'comment' => $this->cmdComment(Resolver::restArgs($argv)),
                 'at' => $this->cmdAt($argv[2] ?? null),
                 'before' => $this->cmdBefore($argv[2] ?? null),
@@ -160,20 +163,75 @@ final class App
     private function unknownCommand(string $command): never
     {
         $this->io->err(Ansi::red("Unknown command: {$command}") . "\n\n");
-        self::printHelp($this->io);
+        self::printHelp($this->io, $this->config);
         exit(1);
     }
 
     private function ambiguousCommand(string $message): never
     {
         $this->io->err(Ansi::red($message) . "\n\n");
-        self::printHelp($this->io);
+        self::printHelp($this->io, $this->config);
         exit(1);
     }
 
-    public static function printHelp(Io $io): void
+    /**
+     * For each entry in `COMMAND_NAMES`, computes the shortest prefix length
+     * that `Resolver::matchCommand` resolves uniquely to that command. The
+     * result is used by `printHelp` to underline the typeable shortcut. When
+     * no shorter prefix works (because every shorter prefix is either
+     * ambiguous or exactly matches a different command), the full name is
+     * used — the user has to type the whole word.
+     *
+     * @return array<string, int>
+     */
+    private static function commandPrefixLengths(): array
     {
-        $cmd = static fn(string $name): string => Ansi::lgreen($name);
+        $result = [];
+        foreach (self::COMMAND_NAMES as $cmd) {
+            $lc = mb_strtolower($cmd);
+            $len = mb_strlen($cmd);
+            $minK = $len;
+            for ($k = 1; $k < $len; $k++) {
+                $prefix = mb_substr($lc, 0, $k);
+                $exactConflict = false;
+                $matchCount = 0;
+                foreach (self::COMMAND_NAMES as $other) {
+                    $olc = mb_strtolower($other);
+                    if ($other !== $cmd && $olc === $prefix) {
+                        $exactConflict = true;
+                        break;
+                    }
+                    if (str_starts_with($olc, $prefix)) {
+                        $matchCount++;
+                    }
+                }
+                if ($exactConflict) {
+                    continue;
+                }
+                if ($matchCount === 1) {
+                    $minK = $k;
+                    break;
+                }
+            }
+            $result[$cmd] = $minK;
+        }
+
+        return $result;
+    }
+
+    public static function printHelp(Io $io, ?Config $config = null): void
+    {
+        $prefixLen = self::commandPrefixLengths();
+        $cmd = static function (string $name) use ($prefixLen): string {
+            if (!isset($prefixLen[$name])) {
+                return Ansi::lgreen($name);
+            }
+            $k = $prefixLen[$name];
+            $head = mb_substr($name, 0, $k);
+            $tail = mb_substr($name, $k);
+
+            return Ansi::lgreen(Ansi::underline($head) . $tail);
+        };
         $req = static fn(string $name): string => Ansi::yellow("<{$name}>");
         $opt = static fn(string $name): string => Ansi::lblack("[") . Ansi::yellow("<{$name}>") . Ansi::lblack("]");
         $val = static fn(string $name): string => Ansi::lgreen($name);
@@ -187,21 +245,23 @@ final class App
                 [$cmd('all'),      '', 'List time entries from both ' . $cmd('pushed') . ' and ' . $cmd('local') . ' (' . Ansi::lgreen('●') . ' synced / ' . Ansi::lyellow('○') . ' local / ' . Ansi::red('✗') . ' failed)'],
                 //[$cmd('types'),    '', 'List the YouTrack work-item types (cached for 24h)'],
             ],
-            'Time' => [
-                [$cmd('track'),    $req('issue') . ' ' . $opt('type'), 'Manually switch local time tracking to ' . $req('issue')],
-                [$cmd('pause'),    $opt('comment'), 'Pause the currently tracked record'],
-                [$cmd('resume'),   $opt('comment'), 'Resume tracking from the most recent record'],
+            'Actions' => [
+                [$cmd('track'),    $req('issue') . ' ' . $opt('type'), 'Start tracking of ' . $req('issue')],
+                [$cmd('interrupt'),$req('issue') . ' ' . $opt('type'), 'Like ' . $cmd('track') . ', but mark the currently open record as paused (auto-resumed by ' . $cmd('done') . ')'],
+                [$cmd('switch'),   $req('type'), 'End current entry and start same one with different ' . $req('type')],
+                [$cmd('pause'),    $opt('comment'), 'Pause the current entry'],
+                [$cmd('resume'),   $opt('comment'), 'Resume tracking from the most recent entry'],
+                [$cmd('done'),     $opt('comment'), 'End the current entry and auto-resume the most recently interrupted one'],
                 [$cmd('end'),      $opt('comment'), 'End the currently tracked entry'],
-                [$cmd('skip'),     $req('offset'), 'End the open record ' . $req('offset') . ' ago and immediately open a new one (e.g. forgotten lunch break)'],
-                [$cmd('steal'),    $req('issue') . ' ' . $req('offset') . ' ' . $opt('type'), 'Punch a ' . $req('offset') . '-long hole in the open record and fill it with ' . $req('issue')],
-                [$cmd('at'),       $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record'],
-                [$cmd('before'),   $req('offset'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('offset')],
-                [$cmd('after'),    $req('offset'), 'Move the end of the last closed non-day record later by ' . $req('offset')],
+                [$cmd('skip'),     $req('span'), 'End the open record ' . $req('span') . ' ago and immediately open a new one (e.g. forgotten lunch break)'],
+                [$cmd('grab'),     $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Grab a ' . $req('span') . '-long time from the open record and fill it with ' . $req('issue')],
                 [$cmd('day'),      $req('issue') . ' ' . $opt('date') . ' ' . $opt('type'), 'Log a full 8h day for ' . $req('issue') . ' on ' . $req('date')],
             ],
-            'Options' => [
+            'Edits' => [
+                [$cmd('at'),       $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record'],
+                [$cmd('before'),   $req('span'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('span')],
+                [$cmd('after'),    $req('span'), 'Move the end of the last closed non-day record later by ' . $req('span')],
                 [$cmd('type'),     $req('type'), 'Change the type of the currently tracked entry'],
-                [$cmd('switch'),   $req('type'), 'End the current entry and open a new one with the same properties and the given ' . $req('type')],
                 [$cmd('comment'),  $req('comment'), 'Add a comment on the currently tracked entry'],
             ],
             'Sync' => [
@@ -212,10 +272,15 @@ final class App
             ],
         ];
 
+        $typeDesc = 'work-item type; see ' . $cmd('types') . ' for the allowed list';
+        if ($config !== null) {
+            $typeDesc .= '. Default: ' . Ansi::lgreen($config->defaultTrackType) . ' (' . $cmd('track') . ' / ' . $cmd('grab') . '), ' . Ansi::lyellow($config->defaultDayType) . ' (' . $cmd('day') . ')';
+        }
+
         $argRows = [
             [$req('issue'),   'YouTrack issue id, e.g. ' . $val('ABC-123')],
-            [$req('type'),    'work-item type; see ' . $cmd('types') . ' for the allowed list. Default: ' . Ansi::lgreen(self::TRACK_DEFAULT_TYPE) . ' (' . $cmd('track') . ' / ' . $cmd('steal') . '), ' . Ansi::lyellow(self::DAY_DEFAULT_TYPE) . ' (' . $cmd('day') . ')'],
-            [$req('offset'),  'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ', ' . $val('1d 4h 15m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m') . ', case- and whitespace-insensitive)'],
+            [$req('type'),    $typeDesc],
+            [$req('span'),    'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ', ' . $val('1d 4h 15m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m') . ', case- and whitespace-insensitive)'],
             [$req('time'),    $val('HH:MM') . ' (keeps the date of the existing timestamp) or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
             [$req('date'),    $val('today') . ' / ' . $val('yesterday') . ' / ' . $val('tomorrow') . ' (and unique prefixes like ' . $val('y') . ', ' . $val('over') . '), day-of-month int (e.g. ' . $val('15') . '), or ISO (e.g. ' . $val('2026-05-08') . '). Default: ' . $val('today')],
             [$req('comment'), 'free-form text; appended to the record\'s existing comment with ' . $val(' | ') . ' separator'],
@@ -236,7 +301,7 @@ final class App
             $argNameWidth = max($argNameWidth, Ansi::length($name));
         }
 
-        $io->out(Ansi::lwhite('timeshit') . ' ' . Ansi::lblack('— personal time tracker for YouTrack + Git +  GitLab') . "\n\n");
+        $io->out(Ansi::lwhite('timeshit') . ' ' . Ansi::lblack('— personal time tracker for YouTrack + Git + GitLab') . "\n\n");
         $io->out("Usage: " . Ansi::lblue('timeshit.php') . " " . $cmd('command') . " " . $opt('args') . "\n\n");
         foreach ($groups as $title => $rows) {
             $io->out(Ansi::lwhite($title) . ":\n");
@@ -466,17 +531,17 @@ final class App
         }
     }
 
-    private function cmdPause(?string $comment): void
+    private function cmdDone(?string $comment): void
     {
         $resolved = $comment === '' ? null : $comment;
-        $result = $this->store->endOpen($this->clock->nowMinute(), 'paused', $resolved);
+        $result = $this->store->endOpen($this->clock->nowMinute(), 'done', $resolved);
         $item = $result['item'];
         if ($item === null) {
-            throw new RuntimeException('pause: no open tracking entry');
+            throw new RuntimeException('done: no open tracking entry');
         }
         $endedAt = $item->endedAt ?? '';
         $this->io->err(sprintf(
-            "Paused %s %s after %s\n",
+            "Stopped %s %s after %s\n",
             $item->issueId,
             Format::recordId($item->id),
             Format::duration($item->startedAt, $endedAt),
@@ -484,25 +549,116 @@ final class App
         if ($item->comment !== '') {
             $this->io->err(sprintf("Comment: %s\n", $item->comment));
         }
+
+        $items = $this->store->load();
+        $target = null;
+        for ($i = count($items) - 2; $i >= 0; $i--) {
+            if ($items[$i]->status === 'paused') {
+                $target = $items[$i];
+                break;
+            }
+        }
+        if ($target === null) {
+            return;
+        }
+        $now = $this->clock->nowMinute();
+        $next = new Record(
+            id: $this->store->nextId(),
+            issueId: $target->issueId,
+            branch: $target->branch,
+            repo: $target->repo,
+            type: $target->type,
+            startedAt: $now,
+            startTrigger: 'resumed',
+            endedAt: null,
+            endTrigger: null,
+            createdAt: $now,
+            modifiedAt: $now,
+        );
+        $this->store->track($next, 'resumed');
+        $onBranch = $next->branch === null ? '' : " ({$next->branch})";
+        $this->io->err(sprintf("Resumed %s %s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $next->type));
+    }
+
+    private function cmdPause(?string $comment): void
+    {
+        $items = $this->store->load();
+        $last = $items === [] ? null : $items[count($items) - 1];
+        if ($last === null || !$last->isOpen()) {
+            throw new RuntimeException('pause: no open tracking entry');
+        }
+
+        $now = $this->clock->nowMinute();
+        $break = new Record(
+            id: $this->store->nextId(),
+            issueId: '',
+            branch: null,
+            repo: '',
+            type: '',
+            startedAt: $now,
+            startTrigger: 'paused',
+            endedAt: null,
+            endTrigger: null,
+            createdAt: $now,
+            modifiedAt: $now,
+            comment: $comment ?? '',
+            status: 'untracked',
+        );
+        $result = $this->store->track($break, 'paused');
+        if (!$result['started']) {
+            return;
+        }
+        $stopped = $result['stopped'];
+        if ($stopped !== null && $stopped->endedAt !== null) {
+            $this->io->err(sprintf(
+                "Paused %s %s after %s\n",
+                $stopped->issueId,
+                Format::recordId($stopped->id),
+                Format::duration($stopped->startedAt, $stopped->endedAt),
+            ));
+        }
+        if ($break->comment !== '') {
+            $this->io->err(sprintf("Comment: %s\n", $break->comment));
+        }
     }
 
     private function cmdResume(?string $comment): void
     {
         $items = $this->store->load();
-        $last = $items === [] ? null : $items[count($items) - 1];
-        if ($last === null) {
+        if ($items === []) {
             throw new RuntimeException('resume: no record to resume');
         }
-        if ($last->isOpen()) {
+        $last = $items[count($items) - 1];
+        if ($last->isOpen() && $last->status !== 'untracked') {
             throw new RuntimeException('resume: a record is already open');
+        }
+        $target = null;
+        for ($i = count($items) - 1; $i >= 0; $i--) {
+            $r = $items[$i];
+            if ($r->status === 'paused') {
+                $target = $r;
+                break;
+            }
+        }
+        if ($target === null) {
+            for ($i = count($items) - 1; $i >= 0; $i--) {
+                $r = $items[$i];
+                if (!$r->isOpen() && $r->status !== 'untracked') {
+                    $target = $r;
+                    break;
+                }
+            }
+        }
+        if ($target === null) {
+            throw new RuntimeException('resume: no record to resume');
         }
         $now = $this->clock->nowMinute();
         $next = new Record(
             id: $this->store->nextId(),
-            issueId: $last->issueId,
-            branch: $last->branch,
-            repo: $last->repo,
-            type: $last->type,
+            issueId: $target->issueId,
+            branch: $target->branch,
+            repo: $target->repo,
+            type: $target->type,
             startedAt: $now,
             startTrigger: 'resumed',
             endedAt: null,
@@ -519,9 +675,9 @@ final class App
         }
     }
 
-    private function cmdSkip(?string $offset): void
+    private function cmdSkip(?string $span): void
     {
-        $offsetMin = Resolver::parseOffset('skip', $offset);
+        $spanMin = Resolver::parseSpan('skip', $span);
 
         $items = $this->store->load();
         $last = $items === [] ? null : $items[count($items) - 1];
@@ -530,9 +686,9 @@ final class App
         }
 
         $nowDt = $this->clock->now();
-        $endDt = $nowDt->modify("-{$offsetMin} minutes");
+        $endDt = $nowDt->modify("-{$spanMin} minutes");
         if ($endDt === false) {
-            throw new RuntimeException("skip: invalid offset");
+            throw new RuntimeException("skip: invalid span");
         }
         try {
             $startDt = new DateTimeImmutable($last->startedAt);
@@ -540,7 +696,7 @@ final class App
             throw new RuntimeException("skip: invalid existing time '{$last->startedAt}'");
         }
         if ($endDt <= $startDt) {
-            throw new RuntimeException("skip: offset too large — would end at or before the open record's start ({$last->startedAt})");
+            throw new RuntimeException("skip: span too large — would end at or before the open record's start ({$last->startedAt})");
         }
 
         $now = $nowDt->format('Y-m-d H:i');
@@ -575,46 +731,46 @@ final class App
         ));
     }
 
-    private function cmdSteal(?string $issue, ?string $offset, ?string $type): void
+    private function cmdGrab(?string $issue, ?string $span, ?string $type): void
     {
-        $issueId = Resolver::requireIssueId('steal', $issue);
-        $offsetMin = Resolver::parseOffset('steal', $offset);
-        $resolvedType = Resolver::resolveType('steal', $type, self::TRACK_DEFAULT_TYPE, $this->types->types(...), $this->config->allowedTypes);
+        $issueId = Resolver::requireIssueId('grab', $issue);
+        $spanMin = Resolver::parseSpan('grab', $span);
+        $resolvedType = Resolver::resolveType('grab', $type, $this->config->defaultTrackType, $this->types->types(...), $this->config->allowedTypes);
 
         $items = $this->store->load();
         $last = $items === [] ? null : $items[count($items) - 1];
         if ($last === null || !$last->isOpen()) {
-            throw new RuntimeException('steal: no open tracking entry');
+            throw new RuntimeException('grab: no open tracking entry');
         }
 
         $nowDt = $this->clock->now();
-        $splitDt = $nowDt->modify("-{$offsetMin} minutes");
+        $splitDt = $nowDt->modify("-{$spanMin} minutes");
         if ($splitDt === false) {
-            throw new RuntimeException("steal: invalid offset");
+            throw new RuntimeException("grab: invalid span");
         }
         try {
             $startDt = new DateTimeImmutable($last->startedAt);
         } catch (Exception) {
-            throw new RuntimeException("steal: invalid existing time '{$last->startedAt}'");
+            throw new RuntimeException("grab: invalid existing time '{$last->startedAt}'");
         }
         if ($splitDt <= $startDt) {
-            throw new RuntimeException("steal: offset too large — would split at or before the open record's start ({$last->startedAt})");
+            throw new RuntimeException("grab: span too large — would split at or before the open record's start ({$last->startedAt})");
         }
 
         $now = $nowDt->format('Y-m-d H:i');
         $splitAt = $splitDt->format('Y-m-d H:i');
 
-        $closed = $last->withEnd($splitAt, 'stolen', $now);
-        $stolen = new Record(
+        $closed = $last->withEnd($splitAt, 'grabbed', $now);
+        $grabbed = new Record(
             id: $this->store->nextId(),
             issueId: $issueId,
             branch: null,
             repo: '',
             type: $resolvedType,
             startedAt: $splitAt,
-            startTrigger: 'stolen',
+            startTrigger: 'grabbed',
             endedAt: $now,
-            endTrigger: 'stolen',
+            endTrigger: 'grabbed',
             createdAt: $now,
             modifiedAt: $now,
         );
@@ -625,7 +781,7 @@ final class App
             repo: $last->repo,
             type: $last->type,
             startedAt: $now,
-            startTrigger: 'stolen',
+            startTrigger: 'grabbed',
             endedAt: null,
             endTrigger: null,
             createdAt: $now,
@@ -633,15 +789,15 @@ final class App
         );
 
         $items[count($items) - 1] = $closed;
-        $items[] = $stolen;
+        $items[] = $grabbed;
         $items[] = $continuation;
         $this->store->save($items);
 
         $this->io->err(sprintf(
-            "Stole %s of %s %s (%s) from %s %s between %s and %s\n",
+            "Grabbed %s of %s %s (%s) from %s %s between %s and %s\n",
             Format::duration($splitAt, $now),
             $issueId,
-            Format::recordId($stolen->id),
+            Format::recordId($grabbed->id),
             $resolvedType,
             $last->issueId,
             Format::recordId($last->id),
@@ -670,15 +826,22 @@ final class App
     private function cmdTrack(?string $issue, ?string $type): void
     {
         $issueId = Resolver::requireIssueId('track', $issue);
-        $resolvedType = Resolver::resolveType('track', $type, self::TRACK_DEFAULT_TYPE, $this->types->types(...), $this->config->allowedTypes);
+        $resolvedType = Resolver::resolveType('track', $type, $this->config->defaultTrackType, $this->types->types(...), $this->config->allowedTypes);
         $this->startRecord($issueId, null, '', $resolvedType, 'manual');
+    }
+
+    private function cmdInterrupt(?string $issue, ?string $type): void
+    {
+        $issueId = Resolver::requireIssueId('interrupt', $issue);
+        $resolvedType = Resolver::resolveType('interrupt', $type, $this->config->defaultTrackType, $this->types->types(...), $this->config->allowedTypes);
+        $this->startRecord($issueId, null, '', $resolvedType, 'manual', forceInterruptIfOpen: true);
     }
 
     private function cmdDay(?string $issue, ?string $date, ?string $type): void
     {
         $issueId = Resolver::requireIssueId('day', $issue);
         $when = Resolver::resolveDate($date);
-        $resolvedType = Resolver::resolveType('day', $type, self::DAY_DEFAULT_TYPE, $this->types->types(...), $this->config->allowedTypes);
+        $resolvedType = Resolver::resolveType('day', $type, $this->config->defaultDayType, $this->types->types(...), $this->config->allowedTypes);
         $dayKey = $when->format('Y-m-d');
         foreach ($this->store->load() as $existing) {
             if ($existing->startTrigger !== 'day') {
@@ -727,9 +890,22 @@ final class App
         $this->startRecord(Resolver::extractIssueId($branch), $branch, $repo, null, 'checkout');
     }
 
-    private function startRecord(string $issueId, ?string $branch, string $repo, ?string $type, string $trigger): void
+    private function startRecord(string $issueId, ?string $branch, string $repo, ?string $type, string $trigger, bool $forceInterruptIfOpen = false): void
     {
-        $resolvedType = $type === null || $type === '' ? self::TRACK_DEFAULT_TYPE : $type;
+        $resolvedType = $type === null || $type === '' ? $this->config->defaultTrackType : $type;
+
+        $items = $this->store->load();
+        $last = $items === [] ? null : $items[count($items) - 1];
+        if ($last !== null && $last->isOpen()) {
+            if ($forceInterruptIfOpen) {
+                $trigger = 'interrupted';
+            } elseif ($last->type === $this->config->defaultTrackType
+                && in_array($resolvedType, $this->config->interruptionTypes, true)
+            ) {
+                $trigger = 'interrupted';
+            }
+        }
+
         $now = $this->clock->nowMinute();
         $next = new Record(
             id: $this->store->nextId(),
@@ -767,14 +943,14 @@ final class App
         $this->modifyTimes('at', 'set', $time);
     }
 
-    private function cmdBefore(?string $offset): void
+    private function cmdBefore(?string $span): void
     {
-        $this->modifyTimes('before', 'sub', $offset);
+        $this->modifyTimes('before', 'sub', $span);
     }
 
-    private function cmdAfter(?string $offset): void
+    private function cmdAfter(?string $span): void
     {
-        $this->modifyTimes('after', 'add', $offset);
+        $this->modifyTimes('after', 'add', $span);
     }
 
     private function modifyTimes(string $cmd, string $mode, ?string $arg): void
@@ -812,16 +988,16 @@ final class App
         if ($mode === 'set') {
             $newDt = Resolver::resolveTime($cmd, $arg, $existing);
         } else {
-            $offsetMin = Resolver::parseOffset($cmd, $arg);
+            $spanMin = Resolver::parseSpan($cmd, $arg);
             try {
                 $existingDt = new DateTimeImmutable($existing);
             } catch (Exception) {
                 throw new RuntimeException("{$cmd}: invalid existing time '{$existing}'");
             }
             $sign = $mode === 'sub' ? '-' : '+';
-            $modified = $existingDt->modify("{$sign}{$offsetMin} minutes");
+            $modified = $existingDt->modify("{$sign}{$spanMin} minutes");
             if ($modified === false) {
-                throw new RuntimeException("{$cmd}: invalid offset");
+                throw new RuntimeException("{$cmd}: invalid span");
             }
             $newDt = $modified;
         }

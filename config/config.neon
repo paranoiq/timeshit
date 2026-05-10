@@ -7,3 +7,8 @@ allowedTypes:
 	- Implementation
 	- Out of office
 	- Test / Review
+defaultTrackType: Implementation
+defaultDayType: Out of office
+interruptionTypes:
+	- 'Communication, Meetings, ...'
+	- Test / Review

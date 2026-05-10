@@ -113,12 +113,12 @@ $items = $store->load();
 Assert::same('2026-05-09 11:30', $items[0]->endedAt);
 Assert::same('2026-05-09 12:00', $items[0]->origEndedAt);
 
-// 10. before with malformed offset errors
+// 10. before with malformed span errors
 [$app, , , $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
 Assert::same(1, $app->run(['ts', 'before', 'garbage']));
-Assert::contains("invalid offset 'garbage'", $io->getErr());
+Assert::contains("invalid span 'garbage'", $io->getErr());
 
 
 // === after (shift the last closed record's endedAt later) ===
@@ -144,9 +144,9 @@ Assert::contains('last record is open', $io->getErr());
 Assert::equal($snapshot, $store->load());
 
 
-// === skip (close at now-offset, immediately reopen at now) ===
+// === skip (close at now-span, immediately reopen at now) ===
 
-// 13. skip closes the open record at now-offset and opens a clone at now
+// 13. skip closes the open record at now-span and opens a clone at now
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+1 hour');
@@ -167,73 +167,73 @@ Assert::null($items[1]->endedAt);
 Assert::same(1, $app->run(['ts', 'skip', '15m']));
 Assert::contains('no open tracking entry', $io->getErr());
 
-// 15. skip with offset >= the open record's duration errors
+// 15. skip with span >= the open record's duration errors
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
 $io->clear();
 Assert::same(1, $app->run(['ts', 'skip', '1h']));
-Assert::contains('offset too large', $io->getErr());
+Assert::contains('span too large', $io->getErr());
 Assert::count(1, $store->load());
 
 
-// === steal (skip but with a closed record filling the gap) ===
+// === grab (skip but with a closed record filling the gap) ===
 
-// 16. steal writes three records: closed-original, stolen, continuation
+// 16. grab writes three records: closed-original, grabbed, continuation
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1', 'doc']);
 $clock->advance('+1 hour');
-Assert::same(0, $app->run(['ts', 'steal', 'XYZ-9', '20m', 'test']));
+Assert::same(0, $app->run(['ts', 'grab', 'XYZ-9', '20m', 'test']));
 $items = $store->load();
 Assert::count(3, $items);
 // closed original
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('Documentation', $items[0]->type);
 Assert::same('2026-05-09 10:40', $items[0]->endedAt);
-Assert::same('stolen', $items[0]->endTrigger);
-// stolen middle
+Assert::same('grabbed', $items[0]->endTrigger);
+// grabbed middle
 Assert::same('XYZ-9', $items[1]->issueId);
 Assert::same('Test / Review', $items[1]->type);
 Assert::same('2026-05-09 10:40', $items[1]->startedAt);
 Assert::same('2026-05-09 11:00', $items[1]->endedAt);
-Assert::same('stolen', $items[1]->startTrigger);
-Assert::same('stolen', $items[1]->endTrigger);
+Assert::same('grabbed', $items[1]->startTrigger);
+Assert::same('grabbed', $items[1]->endTrigger);
 Assert::same('', $items[1]->repo);
 Assert::null($items[1]->branch);
 // continuation
 Assert::same('ABC-1', $items[2]->issueId);
 Assert::same('Documentation', $items[2]->type);
 Assert::same('2026-05-09 11:00', $items[2]->startedAt);
-Assert::same('stolen', $items[2]->startTrigger);
+Assert::same('grabbed', $items[2]->startTrigger);
 Assert::null($items[2]->endedAt);
 
-// 17. steal default type is Implementation when no type is provided
+// 17. grab default type is Implementation when no type is provided
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1', 'doc']);
 $clock->advance('+1 hour');
-$app->run(['ts', 'steal', 'XYZ-9', '20m']);
+$app->run(['ts', 'grab', 'XYZ-9', '20m']);
 Assert::same('Implementation', $store->load()[1]->type);
 
-// 18. steal with invalid issue rejects
+// 18. grab with invalid issue rejects
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+1 hour');
 $snapshot = $store->load();
 $io->clear();
-Assert::same(1, $app->run(['ts', 'steal', 'not-id', '20m']));
+Assert::same(1, $app->run(['ts', 'grab', 'not-id', '20m']));
 Assert::contains("invalid issue 'not-id'", $io->getErr());
 Assert::equal($snapshot, $store->load());
 
-// 19. steal with no open record errors
+// 19. grab with no open record errors
 [$app, , , $io] = newApp();
-Assert::same(1, $app->run(['ts', 'steal', 'XYZ-9', '20m']));
+Assert::same(1, $app->run(['ts', 'grab', 'XYZ-9', '20m']));
 Assert::contains('no open tracking entry', $io->getErr());
 
-// 20. steal with offset >= open record's duration errors
+// 20. grab with span >= open record's duration errors
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+15 minutes');
 $io->clear();
-Assert::same(1, $app->run(['ts', 'steal', 'XYZ-9', '30m']));
-Assert::contains('offset too large', $io->getErr());
+Assert::same(1, $app->run(['ts', 'grab', 'XYZ-9', '30m']));
+Assert::contains('span too large', $io->getErr());
 Assert::count(1, $store->load());

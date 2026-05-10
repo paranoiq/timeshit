@@ -6,6 +6,8 @@ use Nette\Neon\Neon;
 use RuntimeException;
 
 use function file_get_contents;
+use function implode;
+use function in_array;
 use function is_array;
 use function is_file;
 use function is_string;
@@ -15,12 +17,18 @@ final class Config
     private const CONFIG_FILE = '/config/config.neon';
     private const SECRETS_FILE = '/config/secrets.neon';
 
-    /** @param list<string> $allowedTypes */
+    /**
+     * @param list<string> $allowedTypes
+     * @param list<string> $interruptionTypes
+     */
     public function __construct(
         public readonly string $youtrackBaseUrl,
         public readonly string $youtrackToken,
         public readonly string $timezone,
         public readonly array $allowedTypes,
+        public readonly string $defaultTrackType,
+        public readonly string $defaultDayType,
+        public readonly array $interruptionTypes,
     ) {}
 
     public static function load(string $rootDir): self
@@ -34,7 +42,15 @@ final class Config
             );
         }
 
-        return new self($cfg['youtrackBaseUrl'], $token, $cfg['timezone'], $cfg['allowedTypes']);
+        return new self(
+            $cfg['youtrackBaseUrl'],
+            $token,
+            $cfg['timezone'],
+            $cfg['allowedTypes'],
+            $cfg['defaultTrackType'],
+            $cfg['defaultDayType'],
+            $cfg['interruptionTypes'],
+        );
     }
 
     /**
@@ -47,7 +63,7 @@ final class Config
         return self::readConfig($rootDir)['timezone'];
     }
 
-    /** @return array{youtrackBaseUrl: string, timezone: string, allowedTypes: list<string>} */
+    /** @return array{youtrackBaseUrl: string, timezone: string, allowedTypes: list<string>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>} */
     private static function readConfig(string $rootDir): array
     {
         $path = $rootDir . self::CONFIG_FILE;
@@ -71,8 +87,69 @@ final class Config
             }
             $names[] = $name;
         }
+        $defaultTrackType = self::requireDefaultType($data, 'defaultTrackType', $names, $path);
+        $defaultDayType = self::requireDefaultType($data, 'defaultDayType', $names, $path);
+        $interruptionTypes = self::readInterruptionTypes($data, $names, $defaultTrackType, $path);
 
-        return ['youtrackBaseUrl' => $baseUrl, 'timezone' => $timezone, 'allowedTypes' => $names];
+        return [
+            'youtrackBaseUrl' => $baseUrl,
+            'timezone' => $timezone,
+            'allowedTypes' => $names,
+            'defaultTrackType' => $defaultTrackType,
+            'defaultDayType' => $defaultDayType,
+            'interruptionTypes' => $interruptionTypes,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param list<string> $allowedNames
+     * @return list<string>
+     */
+    private static function readInterruptionTypes(array $data, array $allowedNames, string $defaultTrackType, string $path): array
+    {
+        $value = $data['interruptionTypes'] ?? null;
+        if (!is_array($value)) {
+            throw new RuntimeException("Missing interruptionTypes in {$path} (expected a list)");
+        }
+        $result = [];
+        foreach ($value as $name) {
+            if (!is_string($name) || $name === '') {
+                throw new RuntimeException("Invalid interruptionTypes entry in {$path} (expected non-empty strings)");
+            }
+            if (!in_array($name, $allowedNames, true)) {
+                throw new RuntimeException(
+                    "interruptionTypes entry '{$name}' in {$path} is not one of allowedTypes (" . implode(', ', $allowedNames) . ')',
+                );
+            }
+            if ($name === $defaultTrackType) {
+                throw new RuntimeException(
+                    "interruptionTypes in {$path} must not contain defaultTrackType '{$defaultTrackType}'",
+                );
+            }
+            $result[] = $name;
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param list<string> $allowedNames
+     */
+    private static function requireDefaultType(array $data, string $key, array $allowedNames, string $path): string
+    {
+        $value = $data[$key] ?? null;
+        if (!is_string($value) || $value === '') {
+            throw new RuntimeException("Missing {$key} in {$path}");
+        }
+        if (!in_array($value, $allowedNames, true)) {
+            throw new RuntimeException(
+                "{$key} '{$value}' in {$path} is not one of allowedTypes (" . implode(', ', $allowedNames) . ')',
+            );
+        }
+
+        return $value;
     }
 
     /** @return array<string, mixed> */

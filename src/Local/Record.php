@@ -11,6 +11,19 @@ use function is_string;
 
 final class Record implements JsonSerializable
 {
+    /**
+     * Lifecycle state of the record. Distinct from `endTrigger` (which
+     * captures the literal cause of closure):
+     *
+     * - `'new'`     — fresh record (open or closed) not yet synced. Default.
+     * - `'paused'`  — record is in a pause state (set by the `pause` command
+     *                 OR by the interruption flow). Detected by `done` and
+     *                 `resume` to find work to bring back.
+     * - `'untracked'` — non-issue record (e.g. lunch break) — placeholder for
+     *                   future commands; not currently produced by anything.
+     * - `'synced'`  — record was uploaded to YouTrack — placeholder.
+     * - `'failed'`  — upload to YouTrack failed — placeholder.
+     */
     public function __construct(
         public readonly int $id,
         public readonly string $issueId,
@@ -26,6 +39,7 @@ final class Record implements JsonSerializable
         public readonly string $comment = '',
         public readonly ?string $origStartedAt = null,
         public readonly ?string $origEndedAt = null,
+        public readonly string $status = 'new',
     ) {}
 
     public function isOpen(): bool
@@ -50,6 +64,7 @@ final class Record implements JsonSerializable
             comment: $comment ?? $this->comment,
             origStartedAt: $this->origStartedAt,
             origEndedAt: $this->origEndedAt,
+            status: $this->status,
         );
     }
 
@@ -70,6 +85,7 @@ final class Record implements JsonSerializable
             comment: $this->comment,
             origStartedAt: $this->origStartedAt,
             origEndedAt: $this->origEndedAt,
+            status: $this->status,
         );
     }
 
@@ -90,6 +106,7 @@ final class Record implements JsonSerializable
             comment: $comment,
             origStartedAt: $this->origStartedAt,
             origEndedAt: $this->origEndedAt,
+            status: $this->status,
         );
     }
 
@@ -115,6 +132,7 @@ final class Record implements JsonSerializable
             comment: $this->comment,
             origStartedAt: $orig,
             origEndedAt: $this->origEndedAt,
+            status: $this->status,
         );
     }
 
@@ -143,6 +161,28 @@ final class Record implements JsonSerializable
             comment: $this->comment,
             origStartedAt: $this->origStartedAt,
             origEndedAt: $orig,
+            status: $this->status,
+        );
+    }
+
+    public function withStatus(string $status, string $modifiedAt): self
+    {
+        return new self(
+            id: $this->id,
+            issueId: $this->issueId,
+            branch: $this->branch,
+            repo: $this->repo,
+            type: $this->type,
+            startedAt: $this->startedAt,
+            startTrigger: $this->startTrigger,
+            endedAt: $this->endedAt,
+            endTrigger: $this->endTrigger,
+            createdAt: $this->createdAt,
+            modifiedAt: $modifiedAt,
+            comment: $this->comment,
+            origStartedAt: $this->origStartedAt,
+            origEndedAt: $this->origEndedAt,
+            status: $status,
         );
     }
 
@@ -155,6 +195,7 @@ final class Record implements JsonSerializable
             'branch' => $this->branch,
             'repo' => $this->repo,
             'type' => $this->type,
+            'status' => $this->status,
             'startedAt' => $this->startedAt,
             'startTrigger' => $this->startTrigger,
             'endedAt' => $this->endedAt,
@@ -203,6 +244,7 @@ final class Record implements JsonSerializable
             comment: self::nullableStr($data, 'comment') ?? '',
             origStartedAt: self::nullableStr($data, 'origStartedAt'),
             origEndedAt: self::nullableStr($data, 'origEndedAt'),
+            status: self::nullableStr($data, 'status') ?? 'new',
         );
     }
 
