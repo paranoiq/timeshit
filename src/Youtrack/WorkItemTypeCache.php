@@ -4,16 +4,14 @@ namespace Timeshit\Youtrack;
 
 use Nette\Neon\Neon;
 use RuntimeException;
+use Timeshit\Util\FileLock;
 
 use function array_map;
-use function dirname;
 use function file_exists;
 use function file_get_contents;
 use function file_put_contents;
 use function filemtime;
 use function is_array;
-use function is_dir;
-use function mkdir;
 use function time;
 
 final class WorkItemTypeCache
@@ -38,40 +36,40 @@ final class WorkItemTypeCache
     /** @return list<WorkItemType> */
     public function load(): array
     {
-        $raw = file_get_contents($this->path);
-        if ($raw === false) {
-            throw new RuntimeException("Failed to read cache: {$this->path}");
-        }
-        $decoded = Neon::decode($raw);
-        if (!is_array($decoded)) {
-            throw new RuntimeException("Cache file is not a NEON map: {$this->path}");
-        }
-        $itemsRaw = $decoded['types'] ?? null;
-        if (!is_array($itemsRaw)) {
-            throw new RuntimeException("Cache missing 'types' field: {$this->path}");
-        }
-        $items = [];
-        foreach ($itemsRaw as $item) {
-            if (!is_array($item)) {
-                continue;
+        return FileLock::shared($this->path, function (): array {
+            $raw = file_get_contents($this->path);
+            if ($raw === false) {
+                throw new RuntimeException("Failed to read cache: {$this->path}");
             }
-            $items[] = WorkItemType::fromArray($item);
-        }
+            $decoded = Neon::decode($raw);
+            if (!is_array($decoded)) {
+                throw new RuntimeException("Cache file is not a NEON map: {$this->path}");
+            }
+            $itemsRaw = $decoded['types'] ?? null;
+            if (!is_array($itemsRaw)) {
+                throw new RuntimeException("Cache missing 'types' field: {$this->path}");
+            }
+            $items = [];
+            foreach ($itemsRaw as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $items[] = WorkItemType::fromArray($item);
+            }
 
-        return $items;
+            return $items;
+        });
     }
 
     /** @param list<WorkItemType> $types */
     public function save(array $types): void
     {
-        $dir = dirname($this->path);
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
-            throw new RuntimeException("Failed to create cache dir: {$dir}");
-        }
-        $payload = ['types' => array_map(static fn(WorkItemType $t): array => (array) $t, $types)];
-        $neon = Neon::encode($payload, Neon::BLOCK);
-        if (file_put_contents($this->path, $neon) === false) {
-            throw new RuntimeException("Failed to write cache: {$this->path}");
-        }
+        FileLock::exclusive($this->path, function () use ($types): void {
+            $payload = ['types' => array_map(static fn(WorkItemType $t): array => (array) $t, $types)];
+            $neon = Neon::encode($payload, Neon::BLOCK);
+            if (file_put_contents($this->path, $neon) === false) {
+                throw new RuntimeException("Failed to write cache: {$this->path}");
+            }
+        });
     }
 }

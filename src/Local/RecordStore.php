@@ -4,6 +4,19 @@ namespace Timeshit\Local;
 
 interface RecordStore
 {
+    /**
+     * Runs `$fn` while holding an exclusive lock on the underlying storage.
+     * All `load` / `save` / `nextId` / mutator calls made from within the
+     * callback are atomic with respect to other processes. Re-entrant: a
+     * `transaction` call from inside another `transaction` does not
+     * re-acquire the lock.
+     *
+     * @template T
+     * @param callable(): T $fn
+     * @return T
+     */
+    public function transaction(callable $fn): mixed;
+
     /** @return list<Record> */
     public function load(): array;
 
@@ -26,13 +39,15 @@ interface RecordStore
     public function appendClosed(Record $closed): void;
 
     /**
-     * Closes the open entry (if any) with the given end timestamp/trigger,
-     * then appends the new open entry. No-op when the open entry already
-     * matches `$next` on `issueId`/`branch`/`repo`/`type`.
+     * Closes the open entry (if any) with the given trigger (a command name,
+     * recorded into the closed record's log), then appends the new open
+     * entry. No-op when the open entry already matches `$next` on
+     * `issueId`/`type`. When `$pauseClosed` is true, the closed record's
+     * status is flipped to `'paused'`.
      *
      * @return array{started: bool, stopped: ?Record}
      */
-    public function track(Record $next, string $endTrigger): array;
+    public function track(Record $next, string $trigger, bool $pauseClosed = false): array;
 
     /**
      * Replaces the type of the latest open entry. No-op when it already has
@@ -40,15 +55,17 @@ interface RecordStore
      *
      * @return array{changed: bool, previousType: ?string, item: ?Record}
      */
-    public function changeOpenType(string $newType, string $modifiedAt): array;
+    public function changeOpenType(string $newType, string $modifiedAt, string $trigger): array;
 
     /**
      * Closes the latest open entry. When `$appendComment` is non-null and
-     * non-empty it is appended to the existing comment with `' | '`.
+     * non-empty it is appended to the existing comment with `' | '`. When
+     * `$pauseClosed` is true, the closed record's status is flipped to
+     * `'paused'`.
      *
      * @return array{ended: bool, item: ?Record}
      */
-    public function endOpen(string $endedAt, string $endTrigger, ?string $appendComment): array;
+    public function endOpen(string $endedAt, string $trigger, ?string $appendComment, bool $pauseClosed = false): array;
 
     /**
      * Appends `$comment` to the comment of the latest non-day entry, joined
@@ -57,5 +74,5 @@ interface RecordStore
      *
      * @return array{changed: bool, item: ?Record}
      */
-    public function commentLast(string $comment, string $modifiedAt): array;
+    public function commentLast(string $comment, string $modifiedAt, string $trigger): array;
 }

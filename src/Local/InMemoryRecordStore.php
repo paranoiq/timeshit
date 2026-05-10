@@ -31,6 +31,11 @@ final class InMemoryRecordStore implements RecordStore
         $this->lastId = $lastId ?? $max;
     }
 
+    public function transaction(callable $fn): mixed
+    {
+        return $fn();
+    }
+
     /** @return list<Record> */
     public function load(): array
     {
@@ -75,22 +80,18 @@ final class InMemoryRecordStore implements RecordStore
     }
 
     /** @return array{started: bool, stopped: ?Record} */
-    public function track(Record $next, string $endTrigger): array
+    public function track(Record $next, string $trigger, bool $pauseClosed = false): array
     {
         $items = $this->items;
         $last = array_pop($items);
         $stopped = null;
         if ($last !== null && $last->isOpen()) {
-            if ($last->issueId === $next->issueId
-                && $last->branch === $next->branch
-                && $last->repo === $next->repo
-                && $last->type === $next->type
-            ) {
+            if ($last->issueId === $next->issueId && $last->type === $next->type) {
                 return ['started' => false, 'stopped' => null];
             }
-            $stopped = $last->withEnd($next->startedAt, $endTrigger, $next->createdAt);
-            if (self::pausesViaTrigger($endTrigger)) {
-                $stopped = $stopped->withStatus('paused', $next->createdAt);
+            $stopped = $last->withEnd($next->startedAt, $trigger);
+            if ($pauseClosed) {
+                $stopped = $stopped->withStatus('paused');
             }
             $items[] = $stopped;
         } elseif ($last !== null) {
@@ -103,7 +104,7 @@ final class InMemoryRecordStore implements RecordStore
     }
 
     /** @return array{changed: bool, previousType: ?string, item: ?Record} */
-    public function changeOpenType(string $newType, string $modifiedAt): array
+    public function changeOpenType(string $newType, string $modifiedAt, string $trigger): array
     {
         $items = $this->items;
         $last = array_pop($items);
@@ -114,7 +115,7 @@ final class InMemoryRecordStore implements RecordStore
             return ['changed' => false, 'previousType' => $last->type, 'item' => $last];
         }
         $previous = $last->type;
-        $updated = $last->withType($newType, $modifiedAt);
+        $updated = $last->withType($newType, $modifiedAt, $trigger);
         $items[] = $updated;
         $this->items = $items;
 
@@ -122,7 +123,7 @@ final class InMemoryRecordStore implements RecordStore
     }
 
     /** @return array{ended: bool, item: ?Record} */
-    public function endOpen(string $endedAt, string $endTrigger, ?string $appendComment): array
+    public function endOpen(string $endedAt, string $trigger, ?string $appendComment, bool $pauseClosed = false): array
     {
         $items = $this->items;
         $last = array_pop($items);
@@ -130,10 +131,10 @@ final class InMemoryRecordStore implements RecordStore
             return ['ended' => false, 'item' => null];
         }
         $closed = $appendComment === null
-            ? $last->withEnd($endedAt, $endTrigger, $endedAt)
-            : $last->withEnd($endedAt, $endTrigger, $endedAt, self::mergeComment($last->comment, $appendComment));
-        if (self::pausesViaTrigger($endTrigger)) {
-            $closed = $closed->withStatus('paused', $endedAt);
+            ? $last->withEnd($endedAt, $trigger)
+            : $last->withEnd($endedAt, $trigger, self::mergeComment($last->comment, $appendComment));
+        if ($pauseClosed) {
+            $closed = $closed->withStatus('paused');
         }
         $items[] = $closed;
         $this->items = $items;
@@ -142,12 +143,12 @@ final class InMemoryRecordStore implements RecordStore
     }
 
     /** @return array{changed: bool, item: ?Record} */
-    public function commentLast(string $comment, string $modifiedAt): array
+    public function commentLast(string $comment, string $modifiedAt, string $trigger): array
     {
         $items = $this->items;
         $targetIndex = null;
         for ($i = count($items) - 1; $i >= 0; $i--) {
-            if ($items[$i]->startTrigger === 'day') {
+            if ($items[$i]->status === 'day') {
                 continue;
             }
             $targetIndex = $i;
@@ -161,7 +162,7 @@ final class InMemoryRecordStore implements RecordStore
         if ($merged === $target->comment) {
             return ['changed' => false, 'item' => $target];
         }
-        $items[$targetIndex] = $target->withComment($merged, $modifiedAt);
+        $items[$targetIndex] = $target->withComment($merged, $modifiedAt, $trigger);
         $this->items = array_values($items);
 
         return ['changed' => true, 'item' => $this->items[$targetIndex]];
@@ -177,11 +178,5 @@ final class InMemoryRecordStore implements RecordStore
         }
 
         return $existing . ' | ' . $more;
-    }
-
-    /** True when an end-trigger leaves the closed record in a pause state. */
-    private static function pausesViaTrigger(string $endTrigger): bool
-    {
-        return $endTrigger === 'paused' || $endTrigger === 'interrupted';
     }
 }

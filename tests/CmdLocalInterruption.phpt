@@ -11,17 +11,16 @@ Environment::setup();
 //
 // When a default-type record (Implementation) is interrupted by a new track of
 // an interruption type ('Communication, Meetings, ...' or 'Test / Review'), the
-// closed record is tagged endTrigger='interrupted' and the new record's
-// startTrigger='interrupted'. The new `done` command closes the open record
-// AND auto-resumes the most recent endTrigger='interrupted' record. If the
+// store flips the closed record's status to 'paused'. `done` closes the open
+// record AND auto-resumes the most recent status='paused' record. If the
 // interrupting record is closed by `end` or replaced by another track, the
-// interrupted one stays paused and `resume` (which now scans backwards for
-// paused/interrupted) can pick it back up.
+// interrupted one stays paused and `resume` (which scans for status='paused')
+// can pick it back up.
 
 // === interruption detection ===
 
-// 1. default-type Impl interrupted by 'Communication, Meetings, ...' tags both ends
-//    AND sets status='paused' on the closed record (the new open record stays 'new')
+// 1. default-type Impl interrupted by 'Communication, Meetings, ...' flips the
+//    closed record's status to 'paused' (the new open record stays 'new')
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);                 // Implementation, open
 $clock->advance('+30 minutes');
@@ -31,11 +30,11 @@ Assert::count(2, $items);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('Implementation', $items[0]->type);
 Assert::same('2026-05-09 10:30', $items[0]->endedAt);
-Assert::same('interrupted', $items[0]->endTrigger);
 Assert::same('paused', $items[0]->status);           // status reflects the pause state
+Assert::contains('closed at 2026-05-09 10:30 (track)', $items[0]->log);
 Assert::same('XYZ-9', $items[1]->issueId);
 Assert::same('Communication, Meetings, ...', $items[1]->type);
-Assert::same('interrupted', $items[1]->startTrigger);
+Assert::contains('created at 2026-05-09 10:30 (track)', $items[1]->log);
 Assert::null($items[1]->endedAt);
 Assert::same('new', $items[1]->status);              // open interrupting record is still 'new'
 
@@ -45,9 +44,8 @@ $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+15 minutes');
 $app->run(['ts', 'track', 'XYZ-9', 'test']);         // 'Test / Review'
 $items = $store->load();
-Assert::same('interrupted', $items[0]->endTrigger);
+Assert::same('paused', $items[0]->status);
 Assert::same('Test / Review', $items[1]->type);
-Assert::same('interrupted', $items[1]->startTrigger);
 
 // 3. interruption fires only when open record's type IS defaultTrackType:
 //    starting from Documentation (allowed but not default), going to a meeting
@@ -57,8 +55,7 @@ $app->run(['ts', 'track', 'ABC-1', 'doc']);
 $clock->advance('+15 minutes');
 $app->run(['ts', 'track', 'XYZ-9', 'com']);
 $items = $store->load();
-Assert::same('manual', $items[0]->endTrigger);       // not 'interrupted'
-Assert::same('manual', $items[1]->startTrigger);
+Assert::same('new', $items[0]->status);              // not 'paused'
 
 // 4. interruption fires only when new type IS in interruptionTypes:
 //    Implementation → Documentation is a regular track-replace.
@@ -67,8 +64,7 @@ $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+15 minutes');
 $app->run(['ts', 'track', 'XYZ-9', 'doc']);
 $items = $store->load();
-Assert::same('manual', $items[0]->endTrigger);
-Assert::same('manual', $items[1]->startTrigger);
+Assert::same('new', $items[0]->status);
 
 
 // === done ===
@@ -85,17 +81,17 @@ Assert::count(3, $items);
 // original (closed by interruption)
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('Implementation', $items[0]->type);
-Assert::same('interrupted', $items[0]->endTrigger);
+Assert::same('paused', $items[0]->status);
 // interruption (closed by done)
 Assert::same('XYZ-9', $items[1]->issueId);
 Assert::same('Communication, Meetings, ...', $items[1]->type);
 Assert::same('2026-05-09 10:50', $items[1]->endedAt);
-Assert::same('done', $items[1]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:50 (done)', $items[1]->log);
 // auto-resumed continuation: clones original
 Assert::same('ABC-1', $items[2]->issueId);
 Assert::same('Implementation', $items[2]->type);
 Assert::same('2026-05-09 10:50', $items[2]->startedAt);
-Assert::same('resumed', $items[2]->startTrigger);
+Assert::contains('created at 2026-05-09 10:50 (done)', $items[2]->log);
 Assert::null($items[2]->endedAt);
 
 // 6. done with no prior interrupted record behaves like end (just closes)
@@ -105,7 +101,7 @@ $clock->advance('+30 minutes');
 Assert::same(0, $app->run(['ts', 'done']));
 $items = $store->load();
 Assert::count(1, $items);
-Assert::same('done', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:30 (done)', $items[0]->log);
 Assert::same('2026-05-09 10:30', $items[0]->endedAt);
 
 // 7. done with no open record errors
@@ -121,7 +117,7 @@ $app->run(['ts', 'track', 'XYZ-9', 'com']);
 $clock->advance('+20 minutes');
 $app->run(['ts', 'done', 'meeting', 'over']);
 $items = $store->load();
-Assert::same('done', $items[1]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:50 (done)', $items[1]->log);
 Assert::same('meeting over', $items[1]->comment);
 
 // 9. done auto-resumes any status='paused' record (manual pause and interruption alike)
@@ -135,22 +131,21 @@ $clock->advance('+30 minutes');
 $app->run(['ts', 'done']);                           // closes XYZ-9 + auto-resume A    → 4
 $items = $store->load();
 Assert::count(4, $items);
-Assert::same('paused', $items[0]->endTrigger);       // manual pause is still 'paused'
-Assert::same('paused', $items[0]->status);
+Assert::same('paused', $items[0]->status);           // closed tracking is paused
 Assert::same('untracked', $items[1]->status);        // break, closed by track replace
 Assert::same('XYZ-9', $items[2]->issueId);
-Assert::same('done', $items[2]->endTrigger);
+Assert::contains('closed at', $items[2]->log);
 Assert::same('new', $items[2]->status);
 // continuation cloned from ABC-1 (skipping the untracked break in the scan)
 Assert::same('ABC-1', $items[3]->issueId);
 Assert::same('Implementation', $items[3]->type);
-Assert::same('resumed', $items[3]->startTrigger);
+Assert::contains('(done)', $items[3]->log);
 Assert::null($items[3]->endedAt);
 
 
 // === interrupted stays paused on end / track ===
 
-// 10. end on an interrupting record leaves the original interrupted (not auto-resumed)
+// 10. end on an interrupting record leaves the original paused (not auto-resumed)
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
@@ -159,11 +154,11 @@ $clock->advance('+20 minutes');
 $app->run(['ts', 'end']);
 $items = $store->load();
 Assert::count(2, $items);                            // no continuation
-Assert::same('interrupted', $items[0]->endTrigger);  // ABC-1 still tagged
-Assert::same('ended', $items[1]->endTrigger);
+Assert::same('paused', $items[0]->status);           // ABC-1 still paused
+Assert::contains('closed at 2026-05-09 10:50 (end)', $items[1]->log);
 
 // 11. tracking yet another record while interrupting closes the meeting normally
-//     and leaves ABC-1 still interrupted
+//     and leaves ABC-1 still paused
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
@@ -172,8 +167,8 @@ $clock->advance('+20 minutes');
 $app->run(['ts', 'track', 'DEF-2', 'doc']);          // non-interruption type, normal track-replace
 $items = $store->load();
 Assert::count(3, $items);
-Assert::same('interrupted', $items[0]->endTrigger);  // ABC-1 still tagged
-Assert::same('manual', $items[1]->endTrigger);       // meeting closed normally, NOT 'interrupted'
+Assert::same('paused', $items[0]->status);           // ABC-1 still paused
+Assert::same('new', $items[1]->status);              // meeting closed normally
 Assert::same('DEF-2', $items[2]->issueId);
 Assert::same('Documentation', $items[2]->type);
 Assert::null($items[2]->endedAt);
@@ -192,9 +187,9 @@ $clock->advance('+5 minutes');
 Assert::same(0, $app->run(['ts', 'resume']));
 $items = $store->load();
 Assert::count(3, $items);
-Assert::same('ABC-1', $items[2]->issueId);           // resumed from the interrupted, not the ended
+Assert::same('ABC-1', $items[2]->issueId);           // resumed from the paused, not the ended
 Assert::same('Implementation', $items[2]->type);
-Assert::same('resumed', $items[2]->startTrigger);
+Assert::contains('created at 2026-05-09 10:55 (resume)', $items[2]->log);
 Assert::same('2026-05-09 10:55', $items[2]->startedAt);
 
 // 13. resume after manual pause still works (regression): closes the open break,
@@ -208,12 +203,12 @@ Assert::same(0, $app->run(['ts', 'resume']));
 $items = $store->load();
 Assert::count(3, $items);
 Assert::same('ABC-1', $items[0]->issueId);
-Assert::same('paused', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:30 (pause)', $items[0]->log);
 Assert::same('paused', $items[0]->status);
 Assert::same('untracked', $items[1]->status);        // break closed by resume
-Assert::same('resumed', $items[1]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:35 (resume)', $items[1]->log);
 Assert::same('ABC-1', $items[2]->issueId);
-Assert::same('resumed', $items[2]->startTrigger);
+Assert::contains('created at 2026-05-09 10:35 (resume)', $items[2]->log);
 Assert::null($items[2]->endedAt);
 
 
@@ -225,9 +220,9 @@ Assert::null($items[2]->endedAt);
 // record's type isn't `defaultTrackType` or the new type isn't in
 // `interruptionTypes`.
 
-// 14. interrupt forces 'interrupted' on the seam regardless of types:
+// 14. interrupt pauses the open record regardless of types:
 //     open record is Documentation (not default), new type is Implementation
-//     (not an interruption type). Plain `track` would tag both ends 'manual'.
+//     (not an interruption type). Plain `track` would NOT have paused.
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1', 'doc']);          // open: Documentation
 $clock->advance('+30 minutes');
@@ -235,10 +230,11 @@ Assert::same(0, $app->run(['ts', 'interrupt', 'XYZ-9']));  // default type: Impl
 $items = $store->load();
 Assert::count(2, $items);
 Assert::same('Documentation', $items[0]->type);
-Assert::same('interrupted', $items[0]->endTrigger);
+Assert::same('paused', $items[0]->status);
+Assert::contains('closed at 2026-05-09 10:30 (interrupt)', $items[0]->log);
 Assert::same('XYZ-9', $items[1]->issueId);
 Assert::same('Implementation', $items[1]->type);
-Assert::same('interrupted', $items[1]->startTrigger);
+Assert::contains('created at 2026-05-09 10:30 (interrupt)', $items[1]->log);
 
 // 15. interrupt + done auto-resumes the original (the whole point of interrupt)
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
@@ -249,11 +245,11 @@ $clock->advance('+15 minutes');
 $app->run(['ts', 'done']);
 $items = $store->load();
 Assert::count(3, $items);
-Assert::same('interrupted', $items[0]->endTrigger);
-Assert::same('done', $items[1]->endTrigger);
+Assert::same('paused', $items[0]->status);
+Assert::contains('closed at 2026-05-09 10:45 (done)', $items[1]->log);
 Assert::same('ABC-1', $items[2]->issueId);
 Assert::same('Documentation', $items[2]->type);      // cloned from original
-Assert::same('resumed', $items[2]->startTrigger);
+Assert::contains('created at 2026-05-09 10:45 (done)', $items[2]->log);
 Assert::null($items[2]->endedAt);
 
 // 16. interrupt accepts an explicit <type>
@@ -263,18 +259,18 @@ $clock->advance('+10 minutes');
 $app->run(['ts', 'interrupt', 'XYZ-9', 'test']);
 $items = $store->load();
 Assert::same('Test / Review', $items[1]->type);
-Assert::same('interrupted', $items[0]->endTrigger);
-Assert::same('interrupted', $items[1]->startTrigger);
+Assert::same('paused', $items[0]->status);
 
-// 17. interrupt with no open record falls back to plain 'manual' (nothing to interrupt)
+// 17. interrupt with no open record just creates a new record (nothing to interrupt)
 [$app, $store] = newApp('2026-05-09 10:00');
 Assert::same(0, $app->run(['ts', 'interrupt', 'ABC-1']));
 $items = $store->load();
 Assert::count(1, $items);
 Assert::same('ABC-1', $items[0]->issueId);
-Assert::same('manual', $items[0]->startTrigger);
+Assert::same('created at 2026-05-09 10:00 (interrupt)', $items[0]->log);
+Assert::same('new', $items[0]->status);
 
-// 18. interrupt on default+default records is also tagged (track would NOT have)
+// 18. interrupt on default+default records also pauses the open record (track would NOT)
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);                 // Impl
 $clock->advance('+15 minutes');
@@ -282,13 +278,16 @@ $app->run(['ts', 'interrupt', 'XYZ-9']);             // also Impl by default
 $items = $store->load();
 Assert::same('Implementation', $items[0]->type);
 Assert::same('Implementation', $items[1]->type);
-Assert::same('interrupted', $items[0]->endTrigger);
-Assert::same('interrupted', $items[1]->startTrigger);
+Assert::same('paused', $items[0]->status);
+Assert::contains('(interrupt)', $items[1]->log);
 
-// 19. interrupt with invalid issue rejects (same as track)
-[$app, , , $io] = newApp();
-Assert::same(1, $app->run(['ts', 'interrupt', 'not-id']));
-Assert::contains("invalid issue 'not-id'", $io->getErr());
+// 19. interrupt with unusual issue id is accepted with a warning (same as track)
+[$app, $store, , $io] = newApp();
+Assert::same(0, $app->run(['ts', 'interrupt', 'not-id']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('not-id', $items[0]->issueId);
+Assert::contains('unusual issue id format', $io->getErr());
 
 
 // === status field lifecycle ===
@@ -301,13 +300,13 @@ Assert::contains("invalid issue 'not-id'", $io->getErr());
 $app->run(['ts', 'track', 'ABC-1']);
 Assert::same('new', $store->load()[0]->status);
 
-// 21. manual pause sets status='paused' (alongside endTrigger='paused')
+// 21. manual pause sets status='paused' on the closed record
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+15 minutes');
 $app->run(['ts', 'pause']);
 $items = $store->load();
-Assert::same('paused', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:15 (pause)', $items[0]->log);
 Assert::same('paused', $items[0]->status);
 
 // 22. resume after pause: closed tracking stays 'paused', closed break stays
@@ -325,23 +324,23 @@ Assert::same('untracked', $items[1]->status);        // closed break record
 Assert::same('new', $items[2]->status);              // continuation is fresh
 
 // 23. end / done / track-replace / switch leave status='new' on the closed record
-//     (only 'paused' and 'interrupted' triggers flip status).
+//     (only `pause` and the interruption flow flip status).
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+10 minutes');
 $app->run(['ts', 'end']);
-Assert::same('new', $store->load()[0]->status);      // 'ended' does not pause
+Assert::same('new', $store->load()[0]->status);      // 'end' does not pause
 
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+10 minutes');
-$app->run(['ts', 'track', 'DEF-2', 'doc']);          // plain track-replace, trigger='manual'
+$app->run(['ts', 'track', 'DEF-2', 'doc']);          // plain track-replace
 Assert::same('new', $store->load()[0]->status);
 
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+10 minutes');
-$app->run(['ts', 'switch', 'doc']);                  // trigger='switched'
+$app->run(['ts', 'switch', 'doc']);                  // switch does not pause
 Assert::same('new', $store->load()[0]->status);
 
 // 24. legacy records without a `status` field load as status='new'
@@ -351,15 +350,10 @@ Assert::same('new', $store->load()[0]->status);
         new Timeshit\Local\Record(
             id: 1,
             issueId: 'OLD-1',
-            branch: null,
-            repo: '',
             type: 'Implementation',
             startedAt: '2026-05-09 09:00',
-            startTrigger: 'manual',
             endedAt: '2026-05-09 09:30',
-            endTrigger: 'ended',
-            createdAt: '2026-05-09 09:00',
-            modifiedAt: '2026-05-09 09:30',
+            log: '',
         ),
     ],
 );

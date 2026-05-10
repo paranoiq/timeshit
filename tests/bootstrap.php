@@ -33,6 +33,7 @@ function newApp(
         youtrackBaseUrl: 'https://example.youtrack.cloud',
         youtrackToken: 'fake-token',
         timezone: 'Europe/Prague',
+        defaultIssuePrefix: 'SW-',
         allowedTypes: ['Implementation', 'Test / Review', 'Documentation', 'Out of office', 'Analyses / Design', 'Communication, Meetings, ...'],
         defaultTrackType: 'Implementation',
         defaultDayType: 'Out of office',

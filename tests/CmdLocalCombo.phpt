@@ -27,21 +27,21 @@ Assert::count(3, $items);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('2026-05-09 09:00', $items[0]->startedAt);
 Assert::same('2026-05-09 10:00', $items[0]->endedAt);
-Assert::same('paused', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:00 (pause)', $items[0]->log);
 Assert::same('paused', $items[0]->status);
 // 2. break — opened by pause, closed by resume
 Assert::same('', $items[1]->issueId);
 Assert::same('untracked', $items[1]->status);
-Assert::same('paused', $items[1]->startTrigger);
+Assert::contains('created at 2026-05-09 10:00 (pause)', $items[1]->log);
 Assert::same('2026-05-09 10:00', $items[1]->startedAt);
 Assert::same('2026-05-09 10:30', $items[1]->endedAt);
-Assert::same('resumed', $items[1]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:30 (resume)', $items[1]->log);
 // 3. resumed segment — cloned from ABC-1, closed by end
 Assert::same('ABC-1', $items[2]->issueId);
 Assert::same('2026-05-09 10:30', $items[2]->startedAt);
-Assert::same('resumed', $items[2]->startTrigger);
+Assert::contains('created at 2026-05-09 10:30 (resume)', $items[2]->log);
 Assert::same('2026-05-09 11:15', $items[2]->endedAt);
-Assert::same('ended', $items[2]->endTrigger);
+Assert::contains('closed at 2026-05-09 11:15 (end)', $items[2]->log);
 
 
 // === combination scenario 2: track → switch type → end (multi-type segments) ===
@@ -57,9 +57,9 @@ $app->run(['ts', 'end']);
 $items = $store->load();
 Assert::count(2, $items);
 Assert::same('Implementation', $items[0]->type);
-Assert::same('switched', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:00 (switch)', $items[0]->log);
 Assert::same('Documentation', $items[1]->type);
-Assert::same('switched', $items[1]->startTrigger);
+Assert::contains('created at 2026-05-09 10:00 (switch)', $items[1]->log);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('ABC-1', $items[1]->issueId);
 Assert::same($items[0]->endedAt, $items[1]->startedAt); // adjacent
@@ -80,9 +80,15 @@ $app->run(['ts', 'before', '30m']);         // shift XYZ-2 startedAt to 09:30
 $items = $store->load();
 Assert::count(2, $items);
 Assert::same('2026-05-09 09:30', $items[0]->endedAt);   // adjacency dragged the prior close back
-Assert::same('2026-05-09 10:00', $items[0]->origEndedAt);
+Assert::contains(
+    'edited endedAt from 2026-05-09 10:00 to 2026-05-09 09:30 at 2026-05-09 10:10 (before)',
+    $items[0]->log,
+);
 Assert::same('2026-05-09 09:30', $items[1]->startedAt);
-Assert::same('2026-05-09 10:00', $items[1]->origStartedAt);
+Assert::contains(
+    'edited startedAt from 2026-05-09 10:00 to 2026-05-09 09:30 at 2026-05-09 10:10 (before)',
+    $items[1]->log,
+);
 
 
 // === combination scenario 4: track → comment → switch (comment placement) ===
@@ -118,7 +124,7 @@ Assert::count(3, $items);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('2026-05-09 09:00', $items[0]->startedAt);
 Assert::same('2026-05-09 09:40', $items[0]->endedAt);
-Assert::same('grabbed', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 09:40 (grab)', $items[0]->log);
 // grabbed middle
 Assert::same('XYZ-9', $items[1]->issueId);
 Assert::same('2026-05-09 09:40', $items[1]->startedAt);
@@ -127,7 +133,7 @@ Assert::same('2026-05-09 10:00', $items[1]->endedAt);
 Assert::same('ABC-1', $items[2]->issueId);
 Assert::same('2026-05-09 10:00', $items[2]->startedAt);
 Assert::same('2026-05-09 10:15', $items[2]->endedAt);
-Assert::same('ended', $items[2]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:15 (end)', $items[2]->log);
 
 
 // === combination scenario 6: end → comment lands on the most recent closed ===
@@ -148,10 +154,11 @@ Assert::contains('Comment on ABC-1', $io->getErr());
 Assert::contains('(last closed)', $io->getErr());
 
 
-// === combination scenario 7: at after end, then track new (origEndedAt persists) ===
+// === combination scenario 7: at after end, then track new — edit log persists ===
 //
-// Editing endedAt with `at` must capture origEndedAt; subsequent commands like
-// `track` (which writes new records) must not disturb that value.
+// Editing endedAt with `at` appends an `edited endedAt from ... to ...` entry to
+// the closed record's log. Subsequent commands (like `track`) write a new record
+// and must not disturb the prior record's log.
 [$app, $store, $clock, $io] = newApp('2026-05-09 09:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+1 hour');                 // 10:00
@@ -159,21 +166,24 @@ $app->run(['ts', 'end']);                   // ABC-1 closed @ 10:00
 $io->setInputs(['y']);
 $app->run(['ts', 'at', '11:00']);           // shift endedAt to 11:00
 $clock->advance('+90 minutes');             // 11:30
-$app->run(['ts', 'track', 'XYZ-2']);        // opens new — must not touch ABC-1's origEndedAt
+$app->run(['ts', 'track', 'XYZ-2']);        // opens new — must not touch ABC-1's log
 $items = $store->load();
 Assert::count(2, $items);
 Assert::same('2026-05-09 11:00', $items[0]->endedAt);
-Assert::same('2026-05-09 10:00', $items[0]->origEndedAt);
+Assert::contains(
+    'edited endedAt from 2026-05-09 10:00 to 2026-05-09 11:00 at 2026-05-09 10:00 (at)',
+    $items[0]->log,
+);
 Assert::same('XYZ-2', $items[1]->issueId);
 Assert::same('2026-05-09 11:30', $items[1]->startedAt);
 
 
-// === combination scenario 8: track → before → end → at — both orig fields on one record ===
+// === combination scenario 8: track → before → end → at — log accumulates both edits ===
 //
-// A record can accumulate both origStartedAt and origEndedAt across separate
-// edit commands: `before` rewrites the open record's startedAt (capturing
-// origStartedAt), `end` closes it, then `at` rewrites endedAt (capturing
-// origEndedAt). The captured first-recorded values persist independently.
+// A record can accumulate both startedAt and endedAt edits across separate edit
+// commands. `before` rewrites the open record's startedAt; `end` closes it;
+// `at` rewrites endedAt. All three entries land in the log alongside the
+// original `created` and `closed` entries.
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 Assert::same('2026-05-09 10:00', $store->load()[0]->startedAt);
@@ -182,7 +192,6 @@ $clock->advance('+30 minutes');             // 10:30
 $io->setInputs(['y']);
 $app->run(['ts', 'before', '1h']);          // open record's startedAt: 10:00 → 09:00
 Assert::same('2026-05-09 09:00', $store->load()[0]->startedAt);
-Assert::same('2026-05-09 10:00', $store->load()[0]->origStartedAt);
 
 $clock->advance('+30 minutes');             // 11:00
 $app->run(['ts', 'end']);                   // closes at 11:00
@@ -194,8 +203,14 @@ $items = $store->load();
 Assert::count(1, $items);
 Assert::same('2026-05-09 09:00', $items[0]->startedAt);
 Assert::same('2026-05-09 14:00', $items[0]->endedAt);
-Assert::same('2026-05-09 10:00', $items[0]->origStartedAt);
-Assert::same('2026-05-09 11:00', $items[0]->origEndedAt);
+Assert::contains(
+    'edited startedAt from 2026-05-09 10:00 to 2026-05-09 09:00 at 2026-05-09 10:30 (before)',
+    $items[0]->log,
+);
+Assert::contains(
+    'edited endedAt from 2026-05-09 11:00 to 2026-05-09 14:00 at 2026-05-09 11:00 (at)',
+    $items[0]->log,
+);
 $err = $io->getErr();
 Assert::contains('Tracking ABC-1', $err);
 Assert::contains('Stopped ABC-1', $err);

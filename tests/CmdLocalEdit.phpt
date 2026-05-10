@@ -2,7 +2,6 @@
 
 use Tester\Assert;
 use Tester\Environment;
-use Timeshit\Local\Record;
 
 require __DIR__ . '/bootstrap.php';
 
@@ -10,7 +9,8 @@ Environment::setup();
 
 // === at (set absolute time on the last non-day record) ===
 
-// 1. on an open record, `at HH:MM` sets startedAt (keeps the date) — needs `y` to confirm
+// 1. on an open record, `at HH:MM` sets startedAt (keeps the date) — needs `y` to confirm;
+//    the edit is appended to the record's log with the original value
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
@@ -18,7 +18,10 @@ $io->setInputs(['y']);
 Assert::same(0, $app->run(['ts', 'at', '09:30']));
 $items = $store->load();
 Assert::same('2026-05-09 09:30', $items[0]->startedAt);
-Assert::same('2026-05-09 10:00', $items[0]->origStartedAt);
+Assert::contains(
+    'edited startedAt from 2026-05-09 10:00 to 2026-05-09 09:30 at 2026-05-09 10:30 (at)',
+    $items[0]->log,
+);
 Assert::null($items[0]->endedAt);
 
 // 2. on a closed record, `at HH:MM` sets endedAt
@@ -30,7 +33,10 @@ $io->setInputs(['y']);
 Assert::same(0, $app->run(['ts', 'at', '14:00']));
 $items = $store->load();
 Assert::same('2026-05-09 14:00', $items[0]->endedAt);
-Assert::same('2026-05-09 11:00', $items[0]->origEndedAt);
+Assert::contains(
+    'edited endedAt from 2026-05-09 11:00 to 2026-05-09 14:00 at 2026-05-09 11:00 (at)',
+    $items[0]->log,
+);
 
 // 3. anything other than `y` cancels the change
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
@@ -64,7 +70,7 @@ Assert::same('2026-05-09 11:00', $items[0]->endedAt);
 
 // === before (shift the last record's relevant timestamp earlier) ===
 
-// 6. before on an open record shifts startedAt earlier and captures origStartedAt
+// 6. before on an open record shifts startedAt earlier; log records the from→to
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
@@ -72,9 +78,12 @@ $io->setInputs(['y']);
 Assert::same(0, $app->run(['ts', 'before', '1h']));
 $items = $store->load();
 Assert::same('2026-05-09 09:00', $items[0]->startedAt);
-Assert::same('2026-05-09 10:00', $items[0]->origStartedAt);
+Assert::contains(
+    'edited startedAt from 2026-05-09 10:00 to 2026-05-09 09:00 at 2026-05-09 10:30 (before)',
+    $items[0]->log,
+);
 
-// 7. a second before further shifts startedAt but does NOT overwrite origStartedAt
+// 7. a second before further shifts startedAt; log keeps both edits in order
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
@@ -84,7 +93,14 @@ $io->setInputs(['y']);
 $app->run(['ts', 'before', '30m']);
 $items = $store->load();
 Assert::same('2026-05-09 08:30', $items[0]->startedAt);
-Assert::same('2026-05-09 10:00', $items[0]->origStartedAt); // still the very first value
+Assert::contains(
+    'edited startedAt from 2026-05-09 10:00 to 2026-05-09 09:00 at 2026-05-09 10:30 (before)',
+    $items[0]->log,
+);
+Assert::contains(
+    'edited startedAt from 2026-05-09 09:00 to 2026-05-09 08:30 at 2026-05-09 10:30 (before)',
+    $items[0]->log,
+);
 
 // 8. adjacency: when before-shifting an open record's startedAt and the prior
 //    record's endedAt matches the OLD startedAt, that endedAt is shifted too
@@ -98,9 +114,15 @@ Assert::same(0, $app->run(['ts', 'before', '15m']));
 $items = $store->load();
 Assert::count(2, $items);
 Assert::same('2026-05-09 10:15', $items[0]->endedAt);            // prev record's end follows
-Assert::same('2026-05-09 10:30', $items[0]->origEndedAt);        // origEndedAt captured
+Assert::contains(
+    'edited endedAt from 2026-05-09 10:30 to 2026-05-09 10:15 at 2026-05-09 10:40 (before)',
+    $items[0]->log,
+);
 Assert::same('2026-05-09 10:15', $items[1]->startedAt);          // open record's start
-Assert::same('2026-05-09 10:30', $items[1]->origStartedAt);
+Assert::contains(
+    'edited startedAt from 2026-05-09 10:30 to 2026-05-09 10:15 at 2026-05-09 10:40 (before)',
+    $items[1]->log,
+);
 
 // 9. before on a closed record shifts endedAt earlier
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
@@ -111,7 +133,10 @@ $io->setInputs(['y']);
 Assert::same(0, $app->run(['ts', 'before', '30m']));
 $items = $store->load();
 Assert::same('2026-05-09 11:30', $items[0]->endedAt);
-Assert::same('2026-05-09 12:00', $items[0]->origEndedAt);
+Assert::contains(
+    'edited endedAt from 2026-05-09 12:00 to 2026-05-09 11:30 at 2026-05-09 12:00 (before)',
+    $items[0]->log,
+);
 
 // 10. before with malformed span errors
 [$app, , , $io] = newApp('2026-05-09 10:00');
@@ -132,7 +157,10 @@ $io->setInputs(['y']);
 Assert::same(0, $app->run(['ts', 'after', '45m']));
 $items = $store->load();
 Assert::same('2026-05-09 11:45', $items[0]->endedAt);
-Assert::same('2026-05-09 11:00', $items[0]->origEndedAt);
+Assert::contains(
+    'edited endedAt from 2026-05-09 11:00 to 2026-05-09 11:45 at 2026-05-09 11:00 (after)',
+    $items[0]->log,
+);
 
 // 12. after on an open record errors (use before/at to move its start, or close it first)
 [$app, $store, , $io] = newApp('2026-05-09 10:00');
@@ -156,10 +184,10 @@ Assert::count(2, $items);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('2026-05-09 10:00', $items[0]->startedAt);
 Assert::same('2026-05-09 10:45', $items[0]->endedAt);
-Assert::same('skipped', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:45 (skip)', $items[0]->log);
 Assert::same('ABC-1', $items[1]->issueId);
 Assert::same('2026-05-09 11:00', $items[1]->startedAt);
-Assert::same('skipped', $items[1]->startTrigger);
+Assert::same('created at 2026-05-09 11:00 (skip)', $items[1]->log);
 Assert::null($items[1]->endedAt);
 
 // 14. skip with no open record errors
@@ -190,21 +218,21 @@ Assert::count(3, $items);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::same('Documentation', $items[0]->type);
 Assert::same('2026-05-09 10:40', $items[0]->endedAt);
-Assert::same('grabbed', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:40 (grab)', $items[0]->log);
 // grabbed middle
 Assert::same('XYZ-9', $items[1]->issueId);
 Assert::same('Test / Review', $items[1]->type);
 Assert::same('2026-05-09 10:40', $items[1]->startedAt);
 Assert::same('2026-05-09 11:00', $items[1]->endedAt);
-Assert::same('grabbed', $items[1]->startTrigger);
-Assert::same('grabbed', $items[1]->endTrigger);
-Assert::same('', $items[1]->repo);
-Assert::null($items[1]->branch);
+Assert::same(
+    'created at 2026-05-09 10:40 (grab) | closed at 2026-05-09 11:00 (grab)',
+    $items[1]->log,
+);
 // continuation
 Assert::same('ABC-1', $items[2]->issueId);
 Assert::same('Documentation', $items[2]->type);
 Assert::same('2026-05-09 11:00', $items[2]->startedAt);
-Assert::same('grabbed', $items[2]->startTrigger);
+Assert::same('created at 2026-05-09 11:00 (grab)', $items[2]->log);
 Assert::null($items[2]->endedAt);
 
 // 17. grab default type is Implementation when no type is provided
@@ -214,15 +242,27 @@ $clock->advance('+1 hour');
 $app->run(['ts', 'grab', 'XYZ-9', '20m']);
 Assert::same('Implementation', $store->load()[1]->type);
 
-// 18. grab with invalid issue rejects
+// 18. grab with unusual issue id is accepted with a warning
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+1 hour');
-$snapshot = $store->load();
 $io->clear();
-Assert::same(1, $app->run(['ts', 'grab', 'not-id', '20m']));
-Assert::contains("invalid issue 'not-id'", $io->getErr());
-Assert::equal($snapshot, $store->load());
+Assert::same(0, $app->run(['ts', 'grab', 'not-id', '20m']));
+$items = $store->load();
+Assert::count(3, $items);
+Assert::same('not-id', $items[1]->issueId);
+Assert::contains('unusual issue id format', $io->getErr());
+
+// 18b. grab with a plain integer expands it with the default prefix
+[$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+1 hour');
+$io->clear();
+Assert::same(0, $app->run(['ts', 'grab', '99', '20m']));
+$items = $store->load();
+Assert::count(3, $items);
+Assert::same('SW-99', $items[1]->issueId);
+Assert::notContains('unusual', $io->getErr());
 
 // 19. grab with no open record errors
 [$app, , , $io] = newApp();

@@ -25,6 +25,7 @@ final class Config
         public readonly string $youtrackBaseUrl,
         public readonly string $youtrackToken,
         public readonly string $timezone,
+        public readonly string $defaultIssuePrefix,
         public readonly array $allowedTypes,
         public readonly string $defaultTrackType,
         public readonly string $defaultDayType,
@@ -46,6 +47,7 @@ final class Config
             $cfg['youtrackBaseUrl'],
             $token,
             $cfg['timezone'],
+            $cfg['defaultIssuePrefix'],
             $cfg['allowedTypes'],
             $cfg['defaultTrackType'],
             $cfg['defaultDayType'],
@@ -63,7 +65,7 @@ final class Config
         return self::readConfig($rootDir)['timezone'];
     }
 
-    /** @return array{youtrackBaseUrl: string, timezone: string, allowedTypes: list<string>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>} */
+    /** @return array{youtrackBaseUrl: string, timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>} */
     private static function readConfig(string $rootDir): array
     {
         $path = $rootDir . self::CONFIG_FILE;
@@ -75,6 +77,10 @@ final class Config
         $timezone = $data['timezone'] ?? null;
         if (!is_string($timezone) || $timezone === '') {
             throw new RuntimeException("Missing timezone in {$path}");
+        }
+        $defaultIssuePrefix = $data['defaultIssuePrefix'] ?? null;
+        if (!is_string($defaultIssuePrefix) || $defaultIssuePrefix === '') {
+            throw new RuntimeException("Missing defaultIssuePrefix in {$path}");
         }
         $allowedTypes = $data['allowedTypes'] ?? null;
         if (!is_array($allowedTypes) || $allowedTypes === []) {
@@ -94,6 +100,7 @@ final class Config
         return [
             'youtrackBaseUrl' => $baseUrl,
             'timezone' => $timezone,
+            'defaultIssuePrefix' => $defaultIssuePrefix,
             'allowedTypes' => $names,
             'defaultTrackType' => $defaultTrackType,
             'defaultDayType' => $defaultDayType,

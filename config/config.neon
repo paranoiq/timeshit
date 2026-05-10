@@ -1,5 +1,6 @@
 youtrackBaseUrl: https://flowbox.youtrack.cloud/
 timezone: Europe/Prague
+defaultIssuePrefix: SW-
 allowedTypes:
 	- Analyses / Design
 	- 'Communication, Meetings, ...'
@@ -7,8 +8,10 @@ allowedTypes:
 	- Implementation
 	- Out of office
 	- Test / Review
-defaultTrackType: Implementation
-defaultDayType: Out of office
 interruptionTypes:
 	- 'Communication, Meetings, ...'
 	- Test / Review
+defaultTrackType: Implementation
+defaultDayType: Out of office
+defaultMeetingIssue: SW-4002
+defaultOutOfOfficeIssue: SW-5070

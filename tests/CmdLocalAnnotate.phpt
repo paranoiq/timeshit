@@ -10,7 +10,7 @@ Environment::setup();
 
 // === type (in-place type change on the open record) ===
 
-// 1. type changes the open record's type, preserves startedAt
+// 1. type changes the open record's type, preserves startedAt; logs the change
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
@@ -19,8 +19,8 @@ $items = $store->load();
 Assert::count(1, $items);
 Assert::same('Documentation', $items[0]->type);
 Assert::same('2026-05-09 10:00', $items[0]->startedAt);
-Assert::same('2026-05-09 10:30', $items[0]->modifiedAt);
 Assert::null($items[0]->endedAt);
+Assert::contains('updated type Documentation at 2026-05-09 10:30 (type)', $items[0]->log);
 
 // 2. type with the same canonical name (different casing) is a no-op
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
@@ -62,13 +62,11 @@ $items = $store->load();
 Assert::count(2, $items);
 Assert::same('Implementation', $items[0]->type);
 Assert::same('2026-05-09 10:30', $items[0]->endedAt);
-Assert::same('switched', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:30 (switch)', $items[0]->log);
 Assert::same('Documentation', $items[1]->type);
-Assert::same('switched', $items[1]->startTrigger);
+Assert::contains('created at 2026-05-09 10:30 (switch)', $items[1]->log);
 Assert::same('2026-05-09 10:30', $items[1]->startedAt);
 Assert::same($items[0]->issueId, $items[1]->issueId);
-Assert::same($items[0]->branch, $items[1]->branch);
-Assert::same($items[0]->repo, $items[1]->repo);
 Assert::null($items[1]->endedAt);
 
 // 7. switch to the same type is a no-op (track guard short-circuits)
@@ -125,15 +123,11 @@ Assert::same('first | second', $store->load()[0]->comment);
 $dayRecord = new Record(
     id: 1,
     issueId: 'OOO-1',
-    branch: null,
-    repo: '',
     type: 'Out of office',
     startedAt: '2026-05-08 09:00',
-    startTrigger: 'day',
     endedAt: '2026-05-08 17:00',
-    endTrigger: 'day',
-    createdAt: '2026-05-08 14:00',
-    modifiedAt: '2026-05-08 14:00',
+    log: 'created at 2026-05-08 09:00 (day) | closed at 2026-05-08 17:00 (day)',
+    status: 'day',
 );
 [$app, , , $io] = newApp('2026-05-09 10:00', [$dayRecord]);
 Assert::same(1, $app->run(['ts', 'comment', 'should', 'not', 'land']));

@@ -240,7 +240,7 @@ final class App
             'Lists' => [
                 [$cmd('status'),   '', 'Show the currently active record (if any) and the last closed one'],
                 [$cmd('issues'),   '', 'List YouTrack issues you are involved in (cached for 24h)'],
-                [$cmd('pushed'),   '', 'List time entries pushed to YouTrack grouped by week and day (cached for 24h)'],
+                [$cmd('pushed'),   '', 'List time entries pushed to YouTrack (cached for 24h)'],
                 [$cmd('local'),    '', 'List locally tracked records not yet synced to YouTrack'],
                 [$cmd('all'),      '', 'List time entries from both ' . $cmd('pushed') . ' and ' . $cmd('local') . ' (' . Ansi::lgreen('●') . ' synced / ' . Ansi::lyellow('○') . ' local / ' . Ansi::red('✗') . ' failed)'],
                 //[$cmd('types'),    '', 'List the YouTrack work-item types (cached for 24h)'],
@@ -252,7 +252,7 @@ final class App
                 [$cmd('pause'),    $opt('comment'), 'Pause the current entry'],
                 [$cmd('resume'),   $opt('comment'), 'Resume tracking from the most recent entry'],
                 [$cmd('done'),     $opt('comment'), 'End the current entry and auto-resume the most recently interrupted one'],
-                [$cmd('end'),      $opt('comment'), 'End the currently tracked entry'],
+                [$cmd('end'),      $opt('comment'), 'End the current entry'],
                 [$cmd('skip'),     $req('span'), 'End the open record ' . $req('span') . ' ago and immediately open a new one (e.g. forgotten lunch break)'],
                 [$cmd('grab'),     $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Grab a ' . $req('span') . '-long time from the open record and fill it with ' . $req('issue')],
                 [$cmd('day'),      $req('issue') . ' ' . $opt('date') . ' ' . $opt('type'), 'Log a full 8h day for ' . $req('issue') . ' on ' . $req('date')],
@@ -261,8 +261,8 @@ final class App
                 [$cmd('at'),       $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record'],
                 [$cmd('before'),   $req('span'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('span')],
                 [$cmd('after'),    $req('span'), 'Move the end of the last closed non-day record later by ' . $req('span')],
-                [$cmd('type'),     $req('type'), 'Change the type of the currently tracked entry'],
-                [$cmd('comment'),  $req('comment'), 'Add a comment on the currently tracked entry'],
+                [$cmd('type'),     $req('type'), 'Change the type of the current entry'],
+                [$cmd('comment'),  $req('comment'), 'Add a comment on the current entry'],
             ],
             'Sync' => [
                 [$cmd('refresh'),  '', 'Force-refresh all caches from YouTrack'],
@@ -349,7 +349,7 @@ final class App
         $previous = null;
         for ($i = count($items) - 1; $i >= 0; $i--) {
             $r = $items[$i];
-            if ($r->startTrigger === 'day') {
+            if ($r->status === 'day') {
                 continue;
             }
             if ($r->isOpen()) {
@@ -409,15 +409,15 @@ final class App
             $timeRange,
             Ansi::lblack('(' . $duration . ')'),
         );
-        if ($r->branch !== null) {
-            $line .= '  ' . Ansi::lblack($r->branch);
-        }
         $title = $titleByIssueId[$r->issueId] ?? '';
         if ($title !== '') {
             $line .= "\n      " . $title;
         }
         if ($r->comment !== '') {
             $line .= "\n      " . Ansi::lblack('"' . $r->comment . '"');
+        }
+        if ($r->log !== '') {
+            $line .= "\n      " . Ansi::lblack($r->log);
         }
 
         return $line;
@@ -452,7 +452,7 @@ final class App
     private function cmdType(?string $newType): void
     {
         $matched = Resolver::resolveType('type', $newType, null, $this->types->types(...), $this->config->allowedTypes);
-        $result = $this->store->changeOpenType($matched, $this->clock->nowMinute());
+        $result = $this->store->changeOpenType($matched, $this->clock->nowMinute(), 'type');
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('type: no open tracking entry to update');
@@ -472,49 +472,44 @@ final class App
     private function cmdSwitch(?string $newType): void
     {
         $matched = Resolver::resolveType('switch', $newType, null, $this->types->types(...), $this->config->allowedTypes);
-        $items = $this->store->load();
-        $last = $items === [] ? null : $items[count($items) - 1];
-        if ($last === null || !$last->isOpen()) {
-            throw new RuntimeException('switch: no open tracking entry');
-        }
-        $trigger = 'switched';
-        $now = $this->clock->nowMinute();
-        $next = new Record(
-            id: $this->store->nextId(),
-            issueId: $last->issueId,
-            branch: $last->branch,
-            repo: $last->repo,
-            type: $matched,
-            startedAt: $now,
-            startTrigger: $trigger,
-            endedAt: null,
-            endTrigger: null,
-            createdAt: $now,
-            modifiedAt: $now,
-        );
-        $result = $this->store->track($next, $trigger);
-        if (!$result['started']) {
-            return;
-        }
-        $stopped = $result['stopped'];
-        if ($stopped !== null && $stopped->endedAt !== null) {
-            $this->io->err(sprintf(
-                "Stopped %s %s (%s) after %s\n",
-                $stopped->issueId,
-                Format::recordId($stopped->id),
-                $stopped->type,
-                Format::duration($stopped->startedAt, $stopped->endedAt),
-            ));
-        }
-        $onBranch = $next->branch === null ? '' : " ({$next->branch})";
-        $inRepo = $next->repo === '' ? '' : " in {$next->repo}";
-        $this->io->err(sprintf("Tracking %s %s%s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $inRepo, $matched));
+        $this->store->transaction(function () use ($matched): void {
+            $items = $this->store->load();
+            $last = $items === [] ? null : $items[count($items) - 1];
+            if ($last === null || !$last->isOpen()) {
+                throw new RuntimeException('switch: no open tracking entry');
+            }
+            $trigger = 'switch';
+            $now = $this->clock->nowMinute();
+            $next = new Record(
+                id: $this->store->nextId(),
+                issueId: $last->issueId,
+                type: $matched,
+                startedAt: $now,
+                endedAt: null,
+                log: Record::logCreated($now, $trigger),
+            );
+            $result = $this->store->track($next, $trigger);
+            if (!$result['started']) {
+                return;
+            }
+            $stopped = $result['stopped'];
+            if ($stopped !== null && $stopped->endedAt !== null) {
+                $this->io->err(sprintf(
+                    "Stopped %s %s (%s) after %s\n",
+                    $stopped->issueId,
+                    Format::recordId($stopped->id),
+                    $stopped->type,
+                    Format::duration($stopped->startedAt, $stopped->endedAt),
+                ));
+            }
+            $this->io->err(sprintf("Tracking %s %s as %s\n", $next->issueId, Format::recordId($next->id), $matched));
+        });
     }
 
     private function cmdEnd(?string $comment): void
     {
         $resolved = $comment === '' ? null : $comment;
-        $result = $this->store->endOpen($this->clock->nowMinute(), 'ended', $resolved);
+        $result = $this->store->endOpen($this->clock->nowMinute(), 'end', $resolved);
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('end: no open tracking entry');
@@ -534,276 +529,255 @@ final class App
     private function cmdDone(?string $comment): void
     {
         $resolved = $comment === '' ? null : $comment;
-        $result = $this->store->endOpen($this->clock->nowMinute(), 'done', $resolved);
-        $item = $result['item'];
-        if ($item === null) {
-            throw new RuntimeException('done: no open tracking entry');
-        }
-        $endedAt = $item->endedAt ?? '';
-        $this->io->err(sprintf(
-            "Stopped %s %s after %s\n",
-            $item->issueId,
-            Format::recordId($item->id),
-            Format::duration($item->startedAt, $endedAt),
-        ));
-        if ($item->comment !== '') {
-            $this->io->err(sprintf("Comment: %s\n", $item->comment));
-        }
-
-        $items = $this->store->load();
-        $target = null;
-        for ($i = count($items) - 2; $i >= 0; $i--) {
-            if ($items[$i]->status === 'paused') {
-                $target = $items[$i];
-                break;
+        $this->store->transaction(function () use ($resolved): void {
+            $result = $this->store->endOpen($this->clock->nowMinute(), 'done', $resolved);
+            $item = $result['item'];
+            if ($item === null) {
+                throw new RuntimeException('done: no open tracking entry');
             }
-        }
-        if ($target === null) {
-            return;
-        }
-        $now = $this->clock->nowMinute();
-        $next = new Record(
-            id: $this->store->nextId(),
-            issueId: $target->issueId,
-            branch: $target->branch,
-            repo: $target->repo,
-            type: $target->type,
-            startedAt: $now,
-            startTrigger: 'resumed',
-            endedAt: null,
-            endTrigger: null,
-            createdAt: $now,
-            modifiedAt: $now,
-        );
-        $this->store->track($next, 'resumed');
-        $onBranch = $next->branch === null ? '' : " ({$next->branch})";
-        $this->io->err(sprintf("Resumed %s %s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $next->type));
+            $endedAt = $item->endedAt ?? '';
+            $this->io->err(sprintf(
+                "Stopped %s %s after %s\n",
+                $item->issueId,
+                Format::recordId($item->id),
+                Format::duration($item->startedAt, $endedAt),
+            ));
+            if ($item->comment !== '') {
+                $this->io->err(sprintf("Comment: %s\n", $item->comment));
+            }
+
+            $items = $this->store->load();
+            $target = null;
+            for ($i = count($items) - 2; $i >= 0; $i--) {
+                if ($items[$i]->status === 'paused') {
+                    $target = $items[$i];
+                    break;
+                }
+            }
+            if ($target === null) {
+                return;
+            }
+            $now = $this->clock->nowMinute();
+            $next = new Record(
+                id: $this->store->nextId(),
+                issueId: $target->issueId,
+                type: $target->type,
+                startedAt: $now,
+                endedAt: null,
+                log: Record::logCreated($now, 'done'),
+            );
+            $this->store->track($next, 'done');
+            $this->io->err(sprintf("Resumed %s %s as %s\n", $next->issueId, Format::recordId($next->id), $next->type));
+        });
     }
 
     private function cmdPause(?string $comment): void
     {
-        $items = $this->store->load();
-        $last = $items === [] ? null : $items[count($items) - 1];
-        if ($last === null || !$last->isOpen()) {
-            throw new RuntimeException('pause: no open tracking entry');
-        }
+        $this->store->transaction(function () use ($comment): void {
+            $items = $this->store->load();
+            $last = $items === [] ? null : $items[count($items) - 1];
+            if ($last === null || !$last->isOpen()) {
+                throw new RuntimeException('pause: no open tracking entry');
+            }
 
-        $now = $this->clock->nowMinute();
-        $break = new Record(
-            id: $this->store->nextId(),
-            issueId: '',
-            branch: null,
-            repo: '',
-            type: '',
-            startedAt: $now,
-            startTrigger: 'paused',
-            endedAt: null,
-            endTrigger: null,
-            createdAt: $now,
-            modifiedAt: $now,
-            comment: $comment ?? '',
-            status: 'untracked',
-        );
-        $result = $this->store->track($break, 'paused');
-        if (!$result['started']) {
-            return;
-        }
-        $stopped = $result['stopped'];
-        if ($stopped !== null && $stopped->endedAt !== null) {
-            $this->io->err(sprintf(
-                "Paused %s %s after %s\n",
-                $stopped->issueId,
-                Format::recordId($stopped->id),
-                Format::duration($stopped->startedAt, $stopped->endedAt),
-            ));
-        }
-        if ($break->comment !== '') {
-            $this->io->err(sprintf("Comment: %s\n", $break->comment));
-        }
+            $now = $this->clock->nowMinute();
+            $break = new Record(
+                id: $this->store->nextId(),
+                issueId: '',
+                type: '',
+                startedAt: $now,
+                endedAt: null,
+                log: Record::logCreated($now, 'pause'),
+                comment: $comment ?? '',
+                status: 'untracked',
+            );
+            $result = $this->store->track($break, 'pause', pauseClosed: true);
+            if (!$result['started']) {
+                return;
+            }
+            $stopped = $result['stopped'];
+            if ($stopped !== null && $stopped->endedAt !== null) {
+                $this->io->err(sprintf(
+                    "Paused %s %s after %s\n",
+                    $stopped->issueId,
+                    Format::recordId($stopped->id),
+                    Format::duration($stopped->startedAt, $stopped->endedAt),
+                ));
+            }
+            if ($break->comment !== '') {
+                $this->io->err(sprintf("Comment: %s\n", $break->comment));
+            }
+        });
     }
 
     private function cmdResume(?string $comment): void
     {
-        $items = $this->store->load();
-        if ($items === []) {
-            throw new RuntimeException('resume: no record to resume');
-        }
-        $last = $items[count($items) - 1];
-        if ($last->isOpen() && $last->status !== 'untracked') {
-            throw new RuntimeException('resume: a record is already open');
-        }
-        $target = null;
-        for ($i = count($items) - 1; $i >= 0; $i--) {
-            $r = $items[$i];
-            if ($r->status === 'paused') {
-                $target = $r;
-                break;
+        $this->store->transaction(function () use ($comment): void {
+            $items = $this->store->load();
+            if ($items === []) {
+                throw new RuntimeException('resume: no record to resume');
             }
-        }
-        if ($target === null) {
+            $last = $items[count($items) - 1];
+            if ($last->isOpen() && $last->status !== 'untracked') {
+                throw new RuntimeException('resume: a record is already open');
+            }
+            $target = null;
             for ($i = count($items) - 1; $i >= 0; $i--) {
                 $r = $items[$i];
-                if (!$r->isOpen() && $r->status !== 'untracked') {
+                if ($r->status === 'paused') {
                     $target = $r;
                     break;
                 }
             }
-        }
-        if ($target === null) {
-            throw new RuntimeException('resume: no record to resume');
-        }
-        $now = $this->clock->nowMinute();
-        $next = new Record(
-            id: $this->store->nextId(),
-            issueId: $target->issueId,
-            branch: $target->branch,
-            repo: $target->repo,
-            type: $target->type,
-            startedAt: $now,
-            startTrigger: 'resumed',
-            endedAt: null,
-            endTrigger: null,
-            createdAt: $now,
-            modifiedAt: $now,
-            comment: $comment ?? '',
-        );
-        $this->store->track($next, 'resumed');
-        $onBranch = $next->branch === null ? '' : " ({$next->branch})";
-        $this->io->err(sprintf("Resumed %s %s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $next->type));
-        if ($next->comment !== '') {
-            $this->io->err(sprintf("Comment: %s\n", $next->comment));
-        }
+            if ($target === null) {
+                for ($i = count($items) - 1; $i >= 0; $i--) {
+                    $r = $items[$i];
+                    if (!$r->isOpen() && $r->status !== 'untracked') {
+                        $target = $r;
+                        break;
+                    }
+                }
+            }
+            if ($target === null) {
+                throw new RuntimeException('resume: no record to resume');
+            }
+            $now = $this->clock->nowMinute();
+            $next = new Record(
+                id: $this->store->nextId(),
+                issueId: $target->issueId,
+                type: $target->type,
+                startedAt: $now,
+                endedAt: null,
+                log: Record::logCreated($now, 'resume'),
+                comment: $comment ?? '',
+            );
+            $this->store->track($next, 'resume');
+            $this->io->err(sprintf("Resumed %s %s as %s\n", $next->issueId, Format::recordId($next->id), $next->type));
+            if ($next->comment !== '') {
+                $this->io->err(sprintf("Comment: %s\n", $next->comment));
+            }
+        });
     }
 
     private function cmdSkip(?string $span): void
     {
         $spanMin = Resolver::parseSpan('skip', $span);
 
-        $items = $this->store->load();
-        $last = $items === [] ? null : $items[count($items) - 1];
-        if ($last === null || !$last->isOpen()) {
-            throw new RuntimeException('skip: no open tracking entry');
-        }
+        $this->store->transaction(function () use ($spanMin): void {
+            $items = $this->store->load();
+            $last = $items === [] ? null : $items[count($items) - 1];
+            if ($last === null || !$last->isOpen()) {
+                throw new RuntimeException('skip: no open tracking entry');
+            }
 
-        $nowDt = $this->clock->now();
-        $endDt = $nowDt->modify("-{$spanMin} minutes");
-        if ($endDt === false) {
-            throw new RuntimeException("skip: invalid span");
-        }
-        try {
-            $startDt = new DateTimeImmutable($last->startedAt);
-        } catch (Exception) {
-            throw new RuntimeException("skip: invalid existing time '{$last->startedAt}'");
-        }
-        if ($endDt <= $startDt) {
-            throw new RuntimeException("skip: span too large — would end at or before the open record's start ({$last->startedAt})");
-        }
+            $nowDt = $this->clock->now();
+            $endDt = $nowDt->modify("-{$spanMin} minutes");
+            if ($endDt === false) {
+                throw new RuntimeException("skip: invalid span");
+            }
+            try {
+                $startDt = new DateTimeImmutable($last->startedAt);
+            } catch (Exception) {
+                throw new RuntimeException("skip: invalid existing time '{$last->startedAt}'");
+            }
+            if ($endDt <= $startDt) {
+                throw new RuntimeException("skip: span too large — would end at or before the open record's start ({$last->startedAt})");
+            }
 
-        $now = $nowDt->format('Y-m-d H:i');
-        $endedAt = $endDt->format('Y-m-d H:i');
+            $now = $nowDt->format('Y-m-d H:i');
+            $endedAt = $endDt->format('Y-m-d H:i');
 
-        $closed = $last->withEnd($endedAt, 'skipped', $now);
-        $next = new Record(
-            id: $this->store->nextId(),
-            issueId: $last->issueId,
-            branch: $last->branch,
-            repo: $last->repo,
-            type: $last->type,
-            startedAt: $now,
-            startTrigger: 'skipped',
-            endedAt: null,
-            endTrigger: null,
-            createdAt: $now,
-            modifiedAt: $now,
-        );
+            $closed = $last->withEnd($endedAt, 'skip');
+            $next = new Record(
+                id: $this->store->nextId(),
+                issueId: $last->issueId,
+                type: $last->type,
+                startedAt: $now,
+                endedAt: null,
+                log: Record::logCreated($now, 'skip'),
+            );
 
-        $items[count($items) - 1] = $closed;
-        $items[] = $next;
-        $this->store->save($items);
+            $items[count($items) - 1] = $closed;
+            $items[] = $next;
+            $this->store->save($items);
 
-        $this->io->err(sprintf(
-            "Skipped %s of %s %s: ended at %s, restarted at %s\n",
-            Format::duration($endedAt, $now),
-            $last->issueId,
-            Format::recordId($last->id),
-            $endedAt,
-            $now,
-        ));
+            $this->io->err(sprintf(
+                "Skipped %s of %s %s: ended at %s, restarted at %s\n",
+                Format::duration($endedAt, $now),
+                $last->issueId,
+                Format::recordId($last->id),
+                $endedAt,
+                $now,
+            ));
+        });
     }
 
     private function cmdGrab(?string $issue, ?string $span, ?string $type): void
     {
-        $issueId = Resolver::requireIssueId('grab', $issue);
+        $issueId = $this->resolveIssueArg('grab', $issue);
         $spanMin = Resolver::parseSpan('grab', $span);
         $resolvedType = Resolver::resolveType('grab', $type, $this->config->defaultTrackType, $this->types->types(...), $this->config->allowedTypes);
 
-        $items = $this->store->load();
-        $last = $items === [] ? null : $items[count($items) - 1];
-        if ($last === null || !$last->isOpen()) {
-            throw new RuntimeException('grab: no open tracking entry');
-        }
+        $this->store->transaction(function () use ($issueId, $spanMin, $resolvedType): void {
+            $items = $this->store->load();
+            $last = $items === [] ? null : $items[count($items) - 1];
+            if ($last === null || !$last->isOpen()) {
+                throw new RuntimeException('grab: no open tracking entry');
+            }
 
-        $nowDt = $this->clock->now();
-        $splitDt = $nowDt->modify("-{$spanMin} minutes");
-        if ($splitDt === false) {
-            throw new RuntimeException("grab: invalid span");
-        }
-        try {
-            $startDt = new DateTimeImmutable($last->startedAt);
-        } catch (Exception) {
-            throw new RuntimeException("grab: invalid existing time '{$last->startedAt}'");
-        }
-        if ($splitDt <= $startDt) {
-            throw new RuntimeException("grab: span too large — would split at or before the open record's start ({$last->startedAt})");
-        }
+            $nowDt = $this->clock->now();
+            $splitDt = $nowDt->modify("-{$spanMin} minutes");
+            if ($splitDt === false) {
+                throw new RuntimeException("grab: invalid span");
+            }
+            try {
+                $startDt = new DateTimeImmutable($last->startedAt);
+            } catch (Exception) {
+                throw new RuntimeException("grab: invalid existing time '{$last->startedAt}'");
+            }
+            if ($splitDt <= $startDt) {
+                throw new RuntimeException("grab: span too large — would split at or before the open record's start ({$last->startedAt})");
+            }
 
-        $now = $nowDt->format('Y-m-d H:i');
-        $splitAt = $splitDt->format('Y-m-d H:i');
+            $now = $nowDt->format('Y-m-d H:i');
+            $splitAt = $splitDt->format('Y-m-d H:i');
 
-        $closed = $last->withEnd($splitAt, 'grabbed', $now);
-        $grabbed = new Record(
-            id: $this->store->nextId(),
-            issueId: $issueId,
-            branch: null,
-            repo: '',
-            type: $resolvedType,
-            startedAt: $splitAt,
-            startTrigger: 'grabbed',
-            endedAt: $now,
-            endTrigger: 'grabbed',
-            createdAt: $now,
-            modifiedAt: $now,
-        );
-        $continuation = new Record(
-            id: $this->store->nextId(),
-            issueId: $last->issueId,
-            branch: $last->branch,
-            repo: $last->repo,
-            type: $last->type,
-            startedAt: $now,
-            startTrigger: 'grabbed',
-            endedAt: null,
-            endTrigger: null,
-            createdAt: $now,
-            modifiedAt: $now,
-        );
+            $closed = $last->withEnd($splitAt, 'grab');
+            $grabbedLog = Record::logCreated($splitAt, 'grab') . ' | ' . Record::logClosed($now, 'grab');
+            $grabbed = new Record(
+                id: $this->store->nextId(),
+                issueId: $issueId,
+                type: $resolvedType,
+                startedAt: $splitAt,
+                endedAt: $now,
+                log: $grabbedLog,
+            );
+            $continuation = new Record(
+                id: $this->store->nextId(),
+                issueId: $last->issueId,
+                type: $last->type,
+                startedAt: $now,
+                endedAt: null,
+                log: Record::logCreated($now, 'grab'),
+            );
 
-        $items[count($items) - 1] = $closed;
-        $items[] = $grabbed;
-        $items[] = $continuation;
-        $this->store->save($items);
+            $items[count($items) - 1] = $closed;
+            $items[] = $grabbed;
+            $items[] = $continuation;
+            $this->store->save($items);
 
-        $this->io->err(sprintf(
-            "Grabbed %s of %s %s (%s) from %s %s between %s and %s\n",
-            Format::duration($splitAt, $now),
-            $issueId,
-            Format::recordId($grabbed->id),
-            $resolvedType,
-            $last->issueId,
-            Format::recordId($last->id),
-            substr($splitAt, 11),
-            substr($now, 11),
-        ));
+            $this->io->err(sprintf(
+                "Grabbed %s of %s %s (%s) from %s %s between %s and %s\n",
+                Format::duration($splitAt, $now),
+                $issueId,
+                Format::recordId($grabbed->id),
+                $resolvedType,
+                $last->issueId,
+                Format::recordId($last->id),
+                substr($splitAt, 11),
+                substr($now, 11),
+            ));
+        });
     }
 
     private function cmdComment(?string $comment): void
@@ -811,7 +785,7 @@ final class App
         if ($comment === null || $comment === '') {
             throw new RuntimeException('comment: missing <text>');
         }
-        $result = $this->store->commentLast($comment, $this->clock->nowMinute());
+        $result = $this->store->commentLast($comment, $this->clock->nowMinute(), 'comment');
         $item = $result['item'];
         if ($item === null) {
             throw new RuntimeException('comment: no record to comment on');
@@ -825,58 +799,56 @@ final class App
 
     private function cmdTrack(?string $issue, ?string $type): void
     {
-        $issueId = Resolver::requireIssueId('track', $issue);
+        $issueId = $this->resolveIssueArg('track', $issue);
         $resolvedType = Resolver::resolveType('track', $type, $this->config->defaultTrackType, $this->types->types(...), $this->config->allowedTypes);
-        $this->startRecord($issueId, null, '', $resolvedType, 'manual');
+        $this->startRecord($issueId, $resolvedType, 'track');
     }
 
     private function cmdInterrupt(?string $issue, ?string $type): void
     {
-        $issueId = Resolver::requireIssueId('interrupt', $issue);
+        $issueId = $this->resolveIssueArg('interrupt', $issue);
         $resolvedType = Resolver::resolveType('interrupt', $type, $this->config->defaultTrackType, $this->types->types(...), $this->config->allowedTypes);
-        $this->startRecord($issueId, null, '', $resolvedType, 'manual', forceInterruptIfOpen: true);
+        $this->startRecord($issueId, $resolvedType, 'interrupt', forceInterruptIfOpen: true);
     }
 
     private function cmdDay(?string $issue, ?string $date, ?string $type): void
     {
-        $issueId = Resolver::requireIssueId('day', $issue);
+        $issueId = $this->resolveIssueArg('day', $issue);
         $when = Resolver::resolveDate($date);
         $resolvedType = Resolver::resolveType('day', $type, $this->config->defaultDayType, $this->types->types(...), $this->config->allowedTypes);
         $dayKey = $when->format('Y-m-d');
-        foreach ($this->store->load() as $existing) {
-            if ($existing->startTrigger !== 'day') {
-                continue;
+        $this->store->transaction(function () use ($issueId, $when, $resolvedType, $dayKey): void {
+            foreach ($this->store->load() as $existing) {
+                if ($existing->status !== 'day') {
+                    continue;
+                }
+                if ((new DateTimeImmutable($existing->startedAt))->format('Y-m-d') === $dayKey) {
+                    throw new RuntimeException(
+                        "day: a full-day record already exists on {$dayKey} ({$existing->issueId}, {$existing->type})",
+                    );
+                }
             }
-            if ((new DateTimeImmutable($existing->startedAt))->format('Y-m-d') === $dayKey) {
-                throw new RuntimeException(
-                    "day: a full-day record already exists on {$dayKey} ({$existing->issueId}, {$existing->type})",
-                );
-            }
-        }
-        $start = $when->setTime(9, 0);
-        $end = $when->setTime(17, 0);
-        $now = $this->clock->nowMinute();
-        $record = new Record(
-            id: $this->store->nextId(),
-            issueId: $issueId,
-            branch: null,
-            repo: '',
-            type: $resolvedType,
-            startedAt: $start->format('Y-m-d H:i'),
-            startTrigger: 'day',
-            endedAt: $end->format('Y-m-d H:i'),
-            endTrigger: 'day',
-            createdAt: $now,
-            modifiedAt: $now,
-        );
-        $this->store->appendClosed($record);
-        $this->io->err(sprintf(
-            "Logged %s %s for %s as %s (8h)\n",
-            $issueId,
-            Format::recordId($record->id),
-            $dayKey,
-            $resolvedType,
-        ));
+            $start = $when->setTime(9, 0)->format('Y-m-d H:i');
+            $end = $when->setTime(17, 0)->format('Y-m-d H:i');
+            $log = Record::logCreated($start, 'day') . ' | ' . Record::logClosed($end, 'day');
+            $record = new Record(
+                id: $this->store->nextId(),
+                issueId: $issueId,
+                type: $resolvedType,
+                startedAt: $start,
+                endedAt: $end,
+                log: $log,
+                status: 'day',
+            );
+            $this->store->appendClosed($record);
+            $this->io->err(sprintf(
+                "Logged %s %s for %s as %s (8h)\n",
+                $issueId,
+                Format::recordId($record->id),
+                $dayKey,
+                $resolvedType,
+            ));
+        });
     }
 
     private function cmdCheckout(?string $branch, ?string $repo): void
@@ -887,55 +859,61 @@ final class App
         if ($repo === null || $repo === '') {
             throw new RuntimeException('checkout: missing <repo>');
         }
-        $this->startRecord(Resolver::extractIssueId($branch), $branch, $repo, null, 'checkout');
+        $this->startRecord(Resolver::extractIssueId($branch), null, 'checkout');
     }
 
-    private function startRecord(string $issueId, ?string $branch, string $repo, ?string $type, string $trigger, bool $forceInterruptIfOpen = false): void
+    private function resolveIssueArg(string $cmd, ?string $issue): string
+    {
+        $issueId = Resolver::requireIssueId($cmd, $issue, $this->config->defaultIssuePrefix);
+        if (!Resolver::isStandardIssueId($issueId)) {
+            $this->io->err(Ansi::lyellow("Warning: '{$issueId}' has unusual issue id format (expected ABC-123)") . "\n");
+        }
+
+        return $issueId;
+    }
+
+    private function startRecord(string $issueId, ?string $type, string $trigger, bool $forceInterruptIfOpen = false): void
     {
         $resolvedType = $type === null || $type === '' ? $this->config->defaultTrackType : $type;
 
-        $items = $this->store->load();
-        $last = $items === [] ? null : $items[count($items) - 1];
-        if ($last !== null && $last->isOpen()) {
-            if ($forceInterruptIfOpen) {
-                $trigger = 'interrupted';
-            } elseif ($last->type === $this->config->defaultTrackType
-                && in_array($resolvedType, $this->config->interruptionTypes, true)
-            ) {
-                $trigger = 'interrupted';
+        $this->store->transaction(function () use ($issueId, $resolvedType, $trigger, $forceInterruptIfOpen): void {
+            $items = $this->store->load();
+            $last = $items === [] ? null : $items[count($items) - 1];
+            $pauseClosed = false;
+            if ($last !== null && $last->isOpen()) {
+                if ($forceInterruptIfOpen) {
+                    $pauseClosed = true;
+                } elseif ($last->type === $this->config->defaultTrackType
+                    && in_array($resolvedType, $this->config->interruptionTypes, true)
+                ) {
+                    $pauseClosed = true;
+                }
             }
-        }
 
-        $now = $this->clock->nowMinute();
-        $next = new Record(
-            id: $this->store->nextId(),
-            issueId: $issueId,
-            branch: $branch,
-            repo: $repo,
-            type: $resolvedType,
-            startedAt: $now,
-            startTrigger: $trigger,
-            endedAt: null,
-            endTrigger: null,
-            createdAt: $now,
-            modifiedAt: $now,
-        );
-        $result = $this->store->track($next, $trigger);
-        if (!$result['started']) {
-            return;
-        }
-        $stopped = $result['stopped'];
-        if ($stopped !== null && $stopped->endedAt !== null) {
-            $this->io->err(sprintf(
-                "Stopped %s %s after %s\n",
-                $stopped->issueId,
-                Format::recordId($stopped->id),
-                Format::duration($stopped->startedAt, $stopped->endedAt),
-            ));
-        }
-        $onBranch = $branch === null ? '' : " ({$branch})";
-        $inRepo = $repo === '' ? '' : " in {$repo}";
-        $this->io->err(sprintf("Tracking %s %s%s%s as %s\n", $next->issueId, Format::recordId($next->id), $onBranch, $inRepo, $resolvedType));
+            $now = $this->clock->nowMinute();
+            $next = new Record(
+                id: $this->store->nextId(),
+                issueId: $issueId,
+                type: $resolvedType,
+                startedAt: $now,
+                endedAt: null,
+                log: Record::logCreated($now, $trigger),
+            );
+            $result = $this->store->track($next, $trigger, $pauseClosed);
+            if (!$result['started']) {
+                return;
+            }
+            $stopped = $result['stopped'];
+            if ($stopped !== null && $stopped->endedAt !== null) {
+                $this->io->err(sprintf(
+                    "Stopped %s %s after %s\n",
+                    $stopped->issueId,
+                    Format::recordId($stopped->id),
+                    Format::duration($stopped->startedAt, $stopped->endedAt),
+                ));
+            }
+            $this->io->err(sprintf("Tracking %s %s as %s\n", $next->issueId, Format::recordId($next->id), $resolvedType));
+        });
     }
 
     private function cmdAt(?string $time): void
@@ -955,11 +933,18 @@ final class App
 
     private function modifyTimes(string $cmd, string $mode, ?string $arg): void
     {
+        $this->store->transaction(function () use ($cmd, $mode, $arg): void {
+            $this->modifyTimesLocked($cmd, $mode, $arg);
+        });
+    }
+
+    private function modifyTimesLocked(string $cmd, string $mode, ?string $arg): void
+    {
         $items = $this->store->load();
 
         $targetIndex = null;
         for ($i = count($items) - 1; $i >= 0; $i--) {
-            if ($items[$i]->startTrigger === 'day') {
+            if ($items[$i]->status === 'day') {
                 continue;
             }
             $targetIndex = $i;
@@ -1014,16 +999,16 @@ final class App
         $adjustedPrevIndex = null;
 
         if ($isOpen) {
-            $newItems[$targetIndex] = $target->withStartedAt($newValue, $modifiedAt);
+            $newItems[$targetIndex] = $target->withStartedAt($newValue, $modifiedAt, $cmd);
             if ($targetIndex > 0) {
                 $prev = $items[$targetIndex - 1];
-                if ($prev->startTrigger !== 'day' && $prev->endedAt === $target->startedAt) {
-                    $newItems[$targetIndex - 1] = $prev->withEndedAt($newValue, $modifiedAt);
+                if ($prev->status !== 'day' && $prev->endedAt === $target->startedAt) {
+                    $newItems[$targetIndex - 1] = $prev->withEndedAt($newValue, $modifiedAt, $cmd);
                     $adjustedPrevIndex = $targetIndex - 1;
                 }
             }
         } else {
-            $newItems[$targetIndex] = $target->withEndedAt($newValue, $modifiedAt);
+            $newItems[$targetIndex] = $target->withEndedAt($newValue, $modifiedAt, $cmd);
         }
 
         $updated = $newItems[$targetIndex];

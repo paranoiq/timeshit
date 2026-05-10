@@ -4,17 +4,15 @@ namespace Timeshit\Youtrack;
 
 use Nette\Neon\Neon;
 use RuntimeException;
+use Timeshit\Util\FileLock;
 
 use function array_map;
-use function dirname;
 use function file_exists;
 use function file_get_contents;
 use function file_put_contents;
 use function filemtime;
 use function is_array;
-use function is_dir;
 use function is_string;
-use function mkdir;
 use function time;
 
 final class IssueCache
@@ -44,47 +42,47 @@ final class IssueCache
     /** @return array{user: string, issues: list<Issue>} */
     public function load(): array
     {
-        $raw = file_get_contents($this->path);
-        if ($raw === false) {
-            throw new RuntimeException("Failed to read cache: {$this->path}");
-        }
-        $decoded = Neon::decode($raw);
-        if (!is_array($decoded)) {
-            throw new RuntimeException("Cache file is not a NEON map: {$this->path}");
-        }
-        $user = $decoded['user'] ?? null;
-        if (!is_string($user)) {
-            throw new RuntimeException("Cache missing 'user' field: {$this->path} (run 'refresh')");
-        }
-        $issuesRaw = $decoded['issues'] ?? null;
-        if (!is_array($issuesRaw)) {
-            throw new RuntimeException("Cache missing 'issues' field: {$this->path} (run 'refresh')");
-        }
-        $issues = [];
-        foreach ($issuesRaw as $item) {
-            if (!is_array($item)) {
-                continue;
+        return FileLock::shared($this->path, function (): array {
+            $raw = file_get_contents($this->path);
+            if ($raw === false) {
+                throw new RuntimeException("Failed to read cache: {$this->path}");
             }
-            $issues[] = Issue::fromArray($item);
-        }
+            $decoded = Neon::decode($raw);
+            if (!is_array($decoded)) {
+                throw new RuntimeException("Cache file is not a NEON map: {$this->path}");
+            }
+            $user = $decoded['user'] ?? null;
+            if (!is_string($user)) {
+                throw new RuntimeException("Cache missing 'user' field: {$this->path} (run 'refresh')");
+            }
+            $issuesRaw = $decoded['issues'] ?? null;
+            if (!is_array($issuesRaw)) {
+                throw new RuntimeException("Cache missing 'issues' field: {$this->path} (run 'refresh')");
+            }
+            $issues = [];
+            foreach ($issuesRaw as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $issues[] = Issue::fromArray($item);
+            }
 
-        return ['user' => $user, 'issues' => $issues];
+            return ['user' => $user, 'issues' => $issues];
+        });
     }
 
     /** @param list<Issue> $issues */
     public function save(string $user, array $issues): void
     {
-        $dir = dirname($this->path);
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
-            throw new RuntimeException("Failed to create cache dir: {$dir}");
-        }
-        $payload = [
-            'user' => $user,
-            'issues' => array_map(static fn(Issue $i): array => (array) $i, $issues),
-        ];
-        $neon = Neon::encode($payload, Neon::BLOCK);
-        if (file_put_contents($this->path, $neon) === false) {
-            throw new RuntimeException("Failed to write cache: {$this->path}");
-        }
+        FileLock::exclusive($this->path, function () use ($user, $issues): void {
+            $payload = [
+                'user' => $user,
+                'issues' => array_map(static fn(Issue $i): array => (array) $i, $issues),
+            ];
+            $neon = Neon::encode($payload, Neon::BLOCK);
+            if (file_put_contents($this->path, $neon) === false) {
+                throw new RuntimeException("Failed to write cache: {$this->path}");
+            }
+        });
     }
 }

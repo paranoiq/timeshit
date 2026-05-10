@@ -42,16 +42,32 @@ final class Resolver
         return implode(' ', $rest);
     }
 
-    public static function requireIssueId(string $cmd, ?string $issue): string
+    /**
+     * Resolves a user-provided `<issue>` argument. Pure digits are expanded
+     * with `$defaultPrefix` (e.g. `123` → `SW-123`). Standard `ABC-123` form
+     * is uppercased. Anything else is returned verbatim — the format is not
+     * enforced so users can track time against issues that don't yet exist
+     * in YouTrack; the caller is expected to warn for non-standard ids
+     * (see `isStandardIssueId`).
+     */
+    public static function requireIssueId(string $cmd, ?string $issue, string $defaultPrefix): string
     {
         if ($issue === null || $issue === '') {
             throw new RuntimeException("{$cmd}: missing <issue>");
         }
-        if (preg_match('/^[A-Za-z]+-\d+$/', $issue) !== 1) {
-            throw new RuntimeException("{$cmd}: invalid issue '{$issue}' (expected format like ABC-123)");
+        if (preg_match('/^\d+$/', $issue) === 1) {
+            return strtoupper($defaultPrefix . $issue);
+        }
+        if (preg_match('/^[A-Za-z]+-\d+$/', $issue) === 1) {
+            return strtoupper($issue);
         }
 
-        return strtoupper($issue);
+        return $issue;
+    }
+
+    public static function isStandardIssueId(string $id): bool
+    {
+        return preg_match('/^[A-Za-z]+-\d+$/', $id) === 1;
     }
 
     public static function extractIssueId(string $branch): string

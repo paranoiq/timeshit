@@ -8,27 +8,24 @@ require __DIR__ . '/bootstrap.php';
 
 Environment::setup();
 
-// === checkout (called by hooks/post-checkout — like track but with branch + repo) ===
+// === checkout (called by hooks/post-checkout — extracts the issue id from the branch) ===
 
-// 1. checkout extracts the issue id from the branch and stores branch + repo
+// 1. checkout extracts the issue id from the branch; logs the `(checkout)` trigger
 [$app, $store] = newApp('2026-05-09 10:00');
 Assert::same(0, $app->run(['ts', 'checkout', 'ABC-123-add-widget', 'my-repo']));
 $items = $store->load();
 Assert::count(1, $items);
 Assert::same('ABC-123', $items[0]->issueId);
-Assert::same('ABC-123-add-widget', $items[0]->branch);
-Assert::same('my-repo', $items[0]->repo);
 Assert::same('Implementation', $items[0]->type);
-Assert::same('checkout', $items[0]->startTrigger);
+Assert::same('created at 2026-05-09 10:00 (checkout)', $items[0]->log);
 Assert::null($items[0]->endedAt);
 
 // 2. branches without an issue prefix become the issue id verbatim
 [$app, $store] = newApp();
 $app->run(['ts', 'checkout', 'main', 'my-repo']);
 Assert::same('main', $store->load()[0]->issueId);
-Assert::same('main', $store->load()[0]->branch);
 
-// 3. checkout to the same branch+repo+issue is a no-op
+// 3. checkout to the same issue+type is a no-op
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'checkout', 'ABC-1', 'my-repo']);
 $snapshot = $store->load();
@@ -44,7 +41,7 @@ $app->run(['ts', 'checkout', 'XYZ-2', 'my-repo']);
 $items = $store->load();
 Assert::count(2, $items);
 Assert::same('2026-05-09 10:30', $items[0]->endedAt);
-Assert::same('checkout', $items[0]->endTrigger);
+Assert::contains('closed at 2026-05-09 10:30 (checkout)', $items[0]->log);
 Assert::same('XYZ-2', $items[1]->issueId);
 
 // 5. missing branch / repo are rejected
@@ -58,7 +55,7 @@ Assert::contains('missing <repo>', $io->getErr());
 
 // === day (full 8h record at 09:00–17:00 on a chosen date) ===
 
-// 6. day appends a closed 8h record with start/end triggers `day`
+// 6. day appends a closed 8h record with status='day' and a (day)-tagged log
 [$app, $store] = newApp('2026-05-09 14:30');
 Assert::same(0, $app->run(['ts', 'day', 'OOO-1', '2026-05-08']));
 $items = $store->load();
@@ -67,11 +64,11 @@ Assert::same('OOO-1', $items[0]->issueId);
 Assert::same('Out of office', $items[0]->type);
 Assert::same('2026-05-08 09:00', $items[0]->startedAt);
 Assert::same('2026-05-08 17:00', $items[0]->endedAt);
-Assert::same('day', $items[0]->startTrigger);
-Assert::same('day', $items[0]->endTrigger);
-Assert::same('2026-05-09 14:30', $items[0]->createdAt); // when the user ran the command
-Assert::null($items[0]->branch);
-Assert::same('', $items[0]->repo);
+Assert::same('day', $items[0]->status);
+Assert::same(
+    'created at 2026-05-08 09:00 (day) | closed at 2026-05-08 17:00 (day)',
+    $items[0]->log,
+);
 
 // 7. day with explicit type
 [$app, $store] = newApp('2026-05-09 14:30');
@@ -96,15 +93,25 @@ $items = $store->load();
 Assert::count(2, $items);
 // day record is at index 0, open record stays at index 1 (latest)
 Assert::same('OOO-1', $items[0]->issueId);
-Assert::same('day', $items[0]->startTrigger);
+Assert::same('day', $items[0]->status);
 Assert::same('ABC-1', $items[1]->issueId);
 Assert::null($items[1]->endedAt);
 
-// 10. day with invalid issue is rejected
+// 10. day with unusual issue id is accepted with a warning
 [$app, $store, , $io] = newApp('2026-05-09 14:30');
-Assert::same(1, $app->run(['ts', 'day', 'not-id', '2026-05-08']));
-Assert::contains("invalid issue 'not-id'", $io->getErr());
-Assert::same([], $store->load());
+Assert::same(0, $app->run(['ts', 'day', 'not-id', '2026-05-08']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('not-id', $items[0]->issueId);
+Assert::contains('unusual issue id format', $io->getErr());
+
+// 10b. day with a plain integer expands it with the default prefix
+[$app, $store, , $io] = newApp('2026-05-09 14:30');
+Assert::same(0, $app->run(['ts', 'day', '7', '2026-05-08']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('SW-7', $items[0]->issueId);
+Assert::notContains('unusual', $io->getErr());
 
 
 // === status ===
@@ -152,15 +159,11 @@ Assert::contains('XYZ-2', $out);
 $dayOnly = new Record(
     id: 1,
     issueId: 'OOO-1',
-    branch: null,
-    repo: '',
     type: 'Out of office',
     startedAt: '2026-05-08 09:00',
-    startTrigger: 'day',
     endedAt: '2026-05-08 17:00',
-    endTrigger: 'day',
-    createdAt: '2026-05-08 14:00',
-    modifiedAt: '2026-05-08 14:00',
+    log: 'created at 2026-05-08 09:00 (day) | closed at 2026-05-08 17:00 (day)',
+    status: 'day',
 );
 [$app, , , $io] = newApp('2026-05-09 10:00', [$dayOnly]);
 $app->run(['ts', 'status']);

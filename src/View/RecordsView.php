@@ -93,22 +93,15 @@ final class RecordsView
             $startStr = date('H:i', $start);
             $endStr = $item->endedAt !== null ? date('H:i', $end) : Ansi::lgreen('  …  ');
             $time = $startStr . Ansi::lblack('–') . $endStr;
-            $endTriggerText = $item->endTrigger ?? 'ongoing';
-            $endTriggerColored = $item->endTrigger !== null ? Ansi::lblack($endTriggerText) : Ansi::lgreen($endTriggerText);
-            $triggers = self::padAnsi(
-                Ansi::lblack($item->startTrigger) . Ansi::lblack(' → ') . $endTriggerColored,
-                28,
-            );
             $commentText = $item->comment === '' ? '' : ' ' . Ansi::lblack($item->comment);
             $comment = '  ' . Format::recordId($item->id) . $commentText;
             echo sprintf(
-                "    %s  %s  %s  %s  %s  %s%s\n",
+                "    %s  %s  %s  %s  %s%s\n",
                 Ansi::link($url, sprintf('%-12s', $item->issueId)),
                 Format::spent($minutes),
                 $type,
                 $title,
                 $time,
-                $triggers,
                 $comment,
             );
         }
@@ -117,10 +110,5 @@ final class RecordsView
     private static function pad(string $s, int $width): string
     {
         return $s . str_repeat(' ', max(0, $width - mb_strwidth($s)));
-    }
-
-    private static function padAnsi(string $s, int $width): string
-    {
-        return $s . str_repeat(' ', max(0, $width - Ansi::length($s)));
     }
 }
