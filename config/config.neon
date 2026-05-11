@@ -1,5 +1,6 @@
 youtrackBaseUrl: https://flowbox.youtrack.cloud/
 timezone: Europe/Prague
+editor: nano
 defaultIssuePrefix: SW-
 allowedTypes:
 	- Analyses / Design

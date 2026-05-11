@@ -43,6 +43,7 @@ function newApp(
         defaultMeetingIssue: 'SW-4002',
         defaultOutOfOfficeType: 'Out of office',
         defaultOutOfOfficeIssue: 'SW-5070',
+        editor: 'true',
     );
     $store = new InMemoryRecordStore($records);
     $clock = new FixedClock($now);

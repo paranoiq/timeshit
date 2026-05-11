@@ -5,6 +5,7 @@ namespace Timeshit;
 use Collator;
 use DateTimeImmutable;
 use Exception;
+use Nette\Neon\Neon;
 use RuntimeException;
 use Throwable;
 use Timeshit\Local\FileRecordStore;
@@ -29,8 +30,15 @@ use Timeshit\Youtrack\WorkItemTypeCache;
 use Timeshit\Youtrack\YoutrackClient;
 use function array_values;
 use function count;
+use function ctype_digit;
 use function date_default_timezone_set;
+use function escapeshellarg;
+use function file_get_contents;
+use function file_put_contents;
+use function implode;
 use function in_array;
+use function is_array;
+use function is_int;
 use function max;
 use function mb_strlen;
 use function mb_strtolower;
@@ -41,7 +49,11 @@ use function str_repeat;
 use function str_starts_with;
 use function strtolower;
 use function substr;
+use function sys_get_temp_dir;
+use function system;
 use function trim;
+use function uniqid;
+use function unlink;
 use function usort;
 
 final class App
@@ -93,7 +105,7 @@ final class App
     private const COMMAND_NAMES = [
         'status', 'issues', 'remote', 'local', 'all', //'types',
         'track', 'interrupt', 'meeting', 'day', 'vacation', 'type', 'switch',
-        'pause', 'resume', 'skip', 'grab', 'put', 'end', 'done', 'note', 'refresh',
+        'pause', 'resume', 'skip', 'grab', 'put', 'end', 'done', 'note', 'edit', 'refresh',
         'at', 'before', 'after',
         'checkout',
         //'configure',
@@ -148,6 +160,7 @@ final class App
                 'end' => $this->cmdEnd(Resolver::restArgs($argv)),
                 'done' => $this->cmdDone(Resolver::restArgs($argv)),
                 'note' => $this->cmdNote(Resolver::restArgs($argv)),
+                'edit' => $this->cmdEdit($argv[2] ?? null),
                 'at' => $this->cmdAt($argv[2] ?? null),
                 'before' => $this->cmdBefore($argv[2] ?? null),
                 'after' => $this->cmdAfter($argv[2] ?? null),
@@ -270,6 +283,7 @@ final class App
                 [$cmd('after'),    $req('span'), 'Move the end of the last closed non-day record later by ' . $req('span')],
                 [$cmd('type'),     $req('type'), 'Change the type of the current entry'],
                 [$cmd('note'),     $req('note'), 'Add a note to the current entry'],
+                [$cmd('edit'),     $req('id'),   'Open record ' . $req('id') . ' in the configured ' . Ansi::lgreen('editor') . ' for free-form editing'],
             ],
             'Sync' => [
                 [$cmd('refresh'),  '', 'Refresh all caches from YouTrack'],
@@ -289,6 +303,7 @@ final class App
             [$req('time'),    $val('HH:MM') . ' or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
             [$req('date'),    'expressions like ' . $val('yesterday') . ' / ' . $val('yes') . ' / ' . $val('y') . ', day-of-month int (e.g. ' . $val('15') . '), or full date. Default: ' . $val('today')],
             [$req('note'),    'free-form text; appended to the record\'s existing note'],
+            [$req('id'),      'numeric record id (the ' . Ansi::lblack('#N') . ' column shown by ' . $cmd('local') . ' / ' . $cmd('status') . ')'],
             [$req('branch'),  'git branch name (used to extract the issue id; passed by git hook)'],
             [$req('repo'),    'repository name (passed by git hook)'],
         ];
@@ -835,6 +850,160 @@ final class App
         }
         $where = $item->isOpen() ? 'active' : 'last closed';
         $this->io->err(sprintf("Note on %s %s (%s): %s\n", $item->issueId, Format::recordId($item->id), $where, $item->note));
+    }
+
+    private function cmdEdit(?string $idArg): void
+    {
+        if ($idArg === null || $idArg === '') {
+            throw new RuntimeException('edit: missing <id>');
+        }
+        if (!ctype_digit($idArg)) {
+            throw new RuntimeException("edit: invalid id '{$idArg}' (expected positive integer)");
+        }
+        $id = (int) $idArg;
+
+        $target = $this->store->transaction(function () use ($id): ?Record {
+            foreach ($this->store->load() as $r) {
+                if ($r->id === $id) {
+                    return $r;
+                }
+            }
+
+            return null;
+        });
+        if ($target === null) {
+            throw new RuntimeException("edit: record #{$id} not found");
+        }
+
+        $original = Neon::encode([
+            'id' => $target->id,
+            'issueId' => $target->issueId,
+            'type' => $target->type,
+            'status' => $target->status,
+            'startedAt' => $target->startedAt,
+            'endedAt' => $target->endedAt,
+            'note' => $target->note,
+            'log' => $target->log,
+        ], Neon::BLOCK);
+
+        $tempPath = sys_get_temp_dir() . '/timeshit-edit-' . $id . '-' . uniqid() . '.neon';
+        if (file_put_contents($tempPath, $original) === false) {
+            throw new RuntimeException("edit: failed to write temp file {$tempPath}");
+        }
+
+        try {
+            $cmd = $this->config->editor . ' ' . escapeshellarg($tempPath);
+            $exitCode = 0;
+            system($cmd, $exitCode);
+            if ($exitCode !== 0) {
+                throw new RuntimeException("edit: editor '{$this->config->editor}' exited with code {$exitCode}");
+            }
+            $updatedRaw = file_get_contents($tempPath);
+            if ($updatedRaw === false) {
+                throw new RuntimeException("edit: failed to read temp file {$tempPath}");
+            }
+        } finally {
+            @unlink($tempPath);
+        }
+
+        if ($updatedRaw === $original) {
+            $this->io->err("No changes.\n");
+
+            return;
+        }
+
+        try {
+            $decoded = Neon::decode($updatedRaw);
+        } catch (Throwable $e) {
+            throw new RuntimeException("edit: failed to parse temp file as NEON: " . $e->getMessage());
+        }
+        if (!is_array($decoded)) {
+            throw new RuntimeException('edit: temp file is not a NEON map');
+        }
+        $newId = $decoded['id'] ?? null;
+        if (!is_int($newId)) {
+            throw new RuntimeException("edit: 'id' field must be an integer");
+        }
+        if ($newId !== $id) {
+            throw new RuntimeException("edit: 'id' field must remain {$id} (got {$newId})");
+        }
+
+        $parsed = Record::fromArray($decoded);
+        if ($parsed->endedAt !== null) {
+            try {
+                $sDt = new DateTimeImmutable($parsed->startedAt);
+                $eDt = new DateTimeImmutable($parsed->endedAt);
+            } catch (Exception) {
+                throw new RuntimeException("edit: invalid timestamps ({$parsed->startedAt} / {$parsed->endedAt})");
+            }
+            if ($sDt >= $eDt) {
+                throw new RuntimeException("edit: would result in non-positive duration ({$parsed->startedAt} → {$parsed->endedAt})");
+            }
+        }
+
+        $this->store->transaction(function () use ($target, $parsed): void {
+            $items = $this->store->load();
+            $index = null;
+            foreach ($items as $i => $r) {
+                if ($r->id === $target->id) {
+                    $index = $i;
+                    break;
+                }
+            }
+            if ($index === null) {
+                throw new RuntimeException("edit: record #{$target->id} disappeared during edit");
+            }
+            $current = $items[$index];
+
+            $logUserEdited = $parsed->log !== $current->log;
+            $finalLog = $parsed->log;
+            $changedFields = [];
+            if (!$logUserEdited) {
+                $now = $this->clock->nowMinute();
+                $fields = [
+                    'issueId' => [$current->issueId, $parsed->issueId],
+                    'type' => [$current->type, $parsed->type],
+                    'status' => [$current->status, $parsed->status],
+                    'startedAt' => [$current->startedAt, $parsed->startedAt],
+                    'endedAt' => [$current->endedAt ?? '(open)', $parsed->endedAt ?? '(open)'],
+                    'note' => [$current->note, $parsed->note],
+                ];
+                $entries = [];
+                foreach ($fields as $field => [$old, $new]) {
+                    if ($old !== $new) {
+                        $entries[] = Record::logEdit($field, $old, $new, $now, 'edit');
+                        $changedFields[] = $field;
+                    }
+                }
+                if ($entries !== []) {
+                    $appended = implode(' | ', $entries);
+                    $finalLog = $current->log === '' ? $appended : $current->log . ' | ' . $appended;
+                }
+            }
+
+            $final = new Record(
+                id: $current->id,
+                issueId: $parsed->issueId,
+                type: $parsed->type,
+                startedAt: $parsed->startedAt,
+                endedAt: $parsed->endedAt,
+                log: $finalLog,
+                note: $parsed->note,
+                status: $parsed->status,
+            );
+            $items[$index] = $final;
+            $this->store->save(array_values($items));
+
+            $summary = $logUserEdited
+                ? 'log rewritten by user'
+                : ($changedFields === [] ? 'no field changes' : 'changed: ' . implode(', ', $changedFields));
+            $this->io->err(sprintf(
+                "Edited %s %s (%s)\n",
+                $final->issueId,
+                Format::recordId($final->id),
+                $summary,
+            ));
+        });
     }
 
     private function cmdTrack(?string $issue, ?string $type): void

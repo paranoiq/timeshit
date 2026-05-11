@@ -37,6 +37,7 @@ final class Config
         public readonly string $defaultMeetingIssue,
         public readonly string $defaultOutOfOfficeType,
         public readonly string $defaultOutOfOfficeIssue,
+        public readonly string $editor,
     ) {}
 
     public static function load(string $rootDir): self
@@ -64,6 +65,7 @@ final class Config
             $cfg['defaultMeetingIssue'],
             $cfg['defaultOutOfOfficeType'],
             $cfg['defaultOutOfOfficeIssue'],
+            $cfg['editor'],
         );
     }
 
@@ -77,7 +79,7 @@ final class Config
         return self::readConfig($rootDir)['timezone'];
     }
 
-    /** @return array{youtrackBaseUrl: string, timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, typeAliases: array<string, list<string>>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>, defaultMeetingType: string, defaultMeetingIssue: string, defaultOutOfOfficeType: string, defaultOutOfOfficeIssue: string} */
+    /** @return array{youtrackBaseUrl: string, timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, typeAliases: array<string, list<string>>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>, defaultMeetingType: string, defaultMeetingIssue: string, defaultOutOfOfficeType: string, defaultOutOfOfficeIssue: string, editor: string} */
     private static function readConfig(string $rootDir): array
     {
         $path = $rootDir . self::CONFIG_FILE;
@@ -119,6 +121,10 @@ final class Config
         if (!is_string($defaultOutOfOfficeIssue) || $defaultOutOfOfficeIssue === '') {
             throw new RuntimeException("Missing defaultOutOfOfficeIssue in {$path}");
         }
+        $editor = $data['editor'] ?? null;
+        if (!is_string($editor) || $editor === '') {
+            throw new RuntimeException("Missing editor in {$path}");
+        }
 
         return [
             'youtrackBaseUrl' => $baseUrl,
@@ -133,6 +139,7 @@ final class Config
             'defaultMeetingIssue' => $defaultMeetingIssue,
             'defaultOutOfOfficeType' => $defaultOutOfOfficeType,
             'defaultOutOfOfficeIssue' => $defaultOutOfOfficeIssue,
+            'editor' => $editor,
         ];
     }
 
