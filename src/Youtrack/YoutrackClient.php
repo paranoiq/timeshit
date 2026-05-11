@@ -18,13 +18,17 @@ use function is_array;
 use function is_int;
 use function is_string;
 use function json_decode;
+use function json_encode;
+use function rawurlencode;
 use function rtrim;
 use function strpos;
 use function substr;
 
 use const CURLINFO_HTTP_CODE;
 use const CURLOPT_CONNECTTIMEOUT;
+use const CURLOPT_CUSTOMREQUEST;
 use const CURLOPT_HTTPHEADER;
+use const CURLOPT_POSTFIELDS;
 use const CURLOPT_RETURNTRANSFER;
 use const CURLOPT_TIMEOUT;
 
@@ -162,6 +166,29 @@ final class YoutrackClient
     }
 
     /**
+     * Creates a work item under `$issueId` with the given duration / type /
+     * date / text and returns the YouTrack-assigned work-item id.
+     *
+     * `$dateMs` is the work-item date as UNIX epoch milliseconds.
+     */
+    public function createWorkItem(string $issueId, int $dateMs, int $minutes, string $typeId, string $text): string
+    {
+        $body = [
+            'date' => $dateMs,
+            'duration' => ['minutes' => $minutes],
+            'type' => ['id' => $typeId],
+            'text' => $text,
+        ];
+        $raw = $this->post('/api/issues/' . rawurlencode($issueId) . '/timeTracking/workItems', ['fields' => 'id'], $body);
+        $id = self::asString($raw['id'] ?? null);
+        if ($id === null || $id === '') {
+            throw new RuntimeException("YouTrack returned no work-item id for {$issueId}");
+        }
+
+        return $id;
+    }
+
+    /**
      * @param array<int|string, scalar> $query
      * @return array<int|string, mixed>
      */
@@ -180,6 +207,55 @@ final class YoutrackClient
             CURLOPT_HTTPHEADER => [
                 'Authorization: Bearer ' . $this->token,
                 'Accept: application/json',
+            ],
+        ]);
+        $body = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if (!is_string($body) || $body === '') {
+            throw new RuntimeException("YouTrack request failed: " . ($err !== '' ? $err : 'empty response'));
+        }
+        if ($code < 200 || $code >= 300) {
+            throw new RuntimeException("YouTrack {$path} returned HTTP {$code}: {$body}");
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException("YouTrack {$path} returned invalid JSON");
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param array<int|string, scalar> $query
+     * @param array<int|string, mixed> $body
+     * @return array<int|string, mixed>
+     */
+    private function post(string $path, array $query, array $body): array
+    {
+        $url = $this->baseUrl . $path . '?' . http_build_query($query);
+        $payload = json_encode($body);
+        if ($payload === false) {
+            throw new RuntimeException("Failed to encode request body for {$path}");
+        }
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new RuntimeException("curl_init failed for {$url}");
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 1,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $this->token,
+                'Accept: application/json',
+                'Content-Type: application/json',
             ],
         ]);
         $body = curl_exec($ch);

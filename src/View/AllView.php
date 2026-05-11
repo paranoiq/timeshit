@@ -8,6 +8,7 @@ use Timeshit\Local\Record;
 use Timeshit\Util\Ansi;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\WorkItem;
+use function array_keys;
 use function intdiv;
 use function max;
 use function mb_strimwidth;
@@ -22,8 +23,9 @@ use function usort;
 /**
  * Renders a unified view of YouTrack work items (already synced) and locally
  * tracked records (not yet synced). Each row carries a status marker so the
- * two are visually distinct: ● green = synced, ○ yellow = local-only, ✗ red
- * = failed-to-sync (reserved for future use).
+ * two are visually distinct: ● green = synced, ▶ green = open (still running),
+ * ○ yellow = local-only closed, ✗ red = failed-to-sync (reserved for future
+ * use).
  */
 final class AllView
 {
@@ -71,7 +73,7 @@ final class AllView
                 : $now;
             $minutes = max(0, intdiv($end - $start, 60));
             $rows[] = [
-                'status' => 'local',
+                'status' => $r->endedAt === null ? 'open' : 'local',
                 'recordStatus' => $r->status,
                 'date' => substr($r->startedAt, 0, 10),
                 'minutes' => $minutes,
@@ -81,68 +83,73 @@ final class AllView
                 'text' => $r->note,
             ];
         }
-        usort($rows, static fn(array $a, array $b): int => $b['date'] <=> $a['date']);
+        usort($rows, static fn(array $a, array $b): int => $a['date'] <=> $b['date']);
 
         $baseUrl = rtrim($this->baseUrl, '/');
 
+        /** @var array<string, list<int>> $rowsByDate */
+        $rowsByDate = [];
         /** @var array<string, int> $weekTotal */
         $weekTotal = [];
         /** @var array<string, int> $dayTotal */
         $dayTotal = [];
-        foreach ($rows as $row) {
+        foreach ($rows as $idx => $row) {
             $weekKey = (new DateTimeImmutable($row['date']))->format('o-\WW');
             $weekTotal[$weekKey] = ($weekTotal[$weekKey] ?? 0) + $row['minutes'];
             $dayTotal[$row['date']] = ($dayTotal[$row['date']] ?? 0) + $row['minutes'];
+            $rowsByDate[$row['date']][] = $idx;
         }
+
+        $dates = Workdays::expand(array_keys($rowsByDate));
 
         echo '  ' . Ansi::lblack('Legend: ')
             . self::statusIndicator('synced') . ' ' . Ansi::lblack('synced  ')
+            . self::statusIndicator('open')   . ' ' . Ansi::lblack('open  ')
             . self::statusIndicator('local')  . ' ' . Ansi::lblack('local  ')
             . self::statusIndicator('failed') . ' ' . Ansi::lblack('failed') . "\n";
 
         $currentWeek = '';
-        $currentDay = '';
-        foreach ($rows as $row) {
-            $dt = new DateTimeImmutable($row['date']);
+        foreach ($dates as $date) {
+            $dt = new DateTimeImmutable($date);
             $weekKey = $dt->format('o-\WW');
-            $dayKey = $row['date'];
 
             if ($weekKey !== $currentWeek) {
                 $weekColor = $weekTotal[$weekKey] >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
                 echo "\n" . $weekColor(sprintf('%-18s', $weekKey)) . '  ' . Format::spent($weekTotal[$weekKey], $weekColor) . "\n";
                 $currentWeek = $weekKey;
-                $currentDay = '';
-            }
-            if ($dayKey !== $currentDay) {
-                $dayLabel = $dt->format('l j.n.');
-                $isWeekend = (int) $dt->format('N') >= 6;
-                $dayColor = match (true) {
-                    $isWeekend => Ansi::yellow(...),
-                    $dayTotal[$dayKey] >= 8 * 60 => Ansi::lgreen(...),
-                    default => Ansi::red(...),
-                };
-                echo '  ' . $dayColor(sprintf('%-16s', $dayLabel)) . '  ' . Format::spent($dayTotal[$dayKey], $dayColor) . "\n";
-                $currentDay = $dayKey;
             }
 
-            $url = $baseUrl . '/issue/' . $row['issueId'];
-            $type = Format::type($row['type']);
-            $title = self::pad(mb_strimwidth($titleByIssueId[$row['issueId']] ?? '', 0, 50, '…'), 50);
-            $textTail = $row['text'] === '' ? '' : ' ' . Ansi::lblack($row['text']);
-            $text = $row['recordId'] !== null
-                ? '  ' . Format::recordId($row['recordId']) . $textTail
-                : ($textTail === '' ? '' : ' ' . $textTail);
-            $recordStatus = $row['recordStatus'] !== null ? '  ' . Format::status($row['recordStatus']) : '';
-            echo sprintf(
-                "    %s %s  %s  %s  %s%s%s\n",
-                self::statusIndicator($row['status']),
-                Ansi::link($url, sprintf('%-12s', $row['issueId'])),
-                Format::spent($row['minutes']),
-                $type,
-                $title,
-                $text,
-                $recordStatus,
-            );
+            $dayMinutes = $dayTotal[$date] ?? 0;
+            $isWeekend = (int) $dt->format('N') >= 6;
+            $dayColor = match (true) {
+                $isWeekend => Ansi::yellow(...),
+                $dayMinutes >= 8 * 60 => Ansi::lgreen(...),
+                default => Ansi::red(...),
+            };
+            $dayLabel = $dt->format('l j.n.');
+            echo '  ' . $dayColor(sprintf('%-16s', $dayLabel)) . '  ' . Format::spent($dayMinutes, $dayColor) . "\n";
+
+            foreach ($rowsByDate[$date] ?? [] as $idx) {
+                $row = $rows[$idx];
+                $url = $baseUrl . '/issue/' . $row['issueId'];
+                $type = Format::type($row['type']);
+                $title = self::pad(mb_strimwidth($titleByIssueId[$row['issueId']] ?? '', 0, 50, '…'), 50);
+                $textTail = $row['text'] === '' ? '' : ' ' . Ansi::lblack($row['text']);
+                $text = $row['recordId'] !== null
+                    ? '  ' . Format::recordId($row['recordId']) . $textTail
+                    : ($textTail === '' ? '' : ' ' . $textTail);
+                $recordStatus = $row['recordStatus'] !== null ? '  ' . Format::status($row['recordStatus']) : '';
+                echo sprintf(
+                    "    %s %s  %s  %s  %s%s%s\n",
+                    self::statusIndicator($row['status']),
+                    Ansi::link($url, sprintf('%-12s', $row['issueId'])),
+                    Format::spent($row['minutes']),
+                    $type,
+                    $title,
+                    $text,
+                    $recordStatus,
+                );
+            }
         }
     }
 
@@ -150,6 +157,7 @@ final class AllView
     {
         return match ($status) {
             'synced' => Ansi::lgreen('●'),
+            'open'   => Ansi::lgreen('▶'),
             'local'  => Ansi::lyellow('○'),
             'failed' => Ansi::red('✗'),
             default  => ' ',

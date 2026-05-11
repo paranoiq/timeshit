@@ -4,6 +4,8 @@ namespace Timeshit\Local;
 
 use RuntimeException;
 
+use function array_flip;
+use function array_merge;
 use function array_pop;
 use function array_values;
 use function count;
@@ -12,6 +14,9 @@ final class InMemoryRecordStore implements RecordStore
 {
     /** @var list<Record> */
     private array $items;
+
+    /** @var list<Record> */
+    private array $archived = [];
 
     private int $lastId;
 
@@ -178,5 +183,59 @@ final class InMemoryRecordStore implements RecordStore
         }
 
         return $existing . ' | ' . $more;
+    }
+
+    /**
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function archive(array $ids, string $workItemId, string $time, string $trigger): array
+    {
+        $idSet = array_flip($ids);
+        $kept = [];
+        $archived = [];
+        foreach ($this->items as $r) {
+            if (isset($idSet[$r->id])) {
+                $archived[] = $r->markSynced($workItemId, $time, $trigger);
+            } else {
+                $kept[] = $r;
+            }
+        }
+        if ($archived === []) {
+            return [];
+        }
+        $this->items = $kept;
+        $this->archived = array_merge($this->archived, $archived);
+
+        return $archived;
+    }
+
+    /**
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function markFailed(array $ids, string $reason, string $time, string $trigger): array
+    {
+        $idSet = array_flip($ids);
+        $updated = [];
+        $items = $this->items;
+        foreach ($items as $i => $r) {
+            if (isset($idSet[$r->id])) {
+                $items[$i] = $r->markFailed($reason, $time, $trigger);
+                $updated[] = $items[$i];
+            }
+        }
+        if ($updated === []) {
+            return [];
+        }
+        $this->items = $items;
+
+        return $updated;
+    }
+
+    /** @return list<Record> */
+    public function loadArchive(): array
+    {
+        return $this->archived;
     }
 }

@@ -42,6 +42,7 @@ final class Record implements JsonSerializable
         public readonly string $log,
         public readonly string $note = '',
         public readonly string $status = 'new',
+        public readonly string $workItemId = '',
     ) {}
 
     public function isOpen(): bool
@@ -80,6 +81,7 @@ final class Record implements JsonSerializable
             log: $this->log === '' ? $entry : $this->log . ' | ' . $entry,
             note: $this->note,
             status: $this->status,
+            workItemId: $this->workItemId,
         );
     }
 
@@ -97,6 +99,7 @@ final class Record implements JsonSerializable
             log: $log,
             note: $note ?? $this->note,
             status: $this->status,
+            workItemId: $this->workItemId,
         );
     }
 
@@ -114,6 +117,7 @@ final class Record implements JsonSerializable
             log: $log,
             note: $this->note,
             status: $this->status,
+            workItemId: $this->workItemId,
         );
     }
 
@@ -131,6 +135,7 @@ final class Record implements JsonSerializable
             log: $log,
             note: $note,
             status: $this->status,
+            workItemId: $this->workItemId,
         );
     }
 
@@ -148,6 +153,7 @@ final class Record implements JsonSerializable
             log: $log,
             note: $this->note,
             status: $this->status,
+            workItemId: $this->workItemId,
         );
     }
 
@@ -168,6 +174,7 @@ final class Record implements JsonSerializable
             log: $log,
             note: $this->note,
             status: $this->status,
+            workItemId: $this->workItemId,
         );
     }
 
@@ -182,13 +189,50 @@ final class Record implements JsonSerializable
             log: $this->log,
             note: $this->note,
             status: $status,
+            workItemId: $this->workItemId,
+        );
+    }
+
+    public function markSynced(string $workItemId, string $time, string $trigger): self
+    {
+        $entry = "synced as {$workItemId} at {$time} ({$trigger})";
+        $log = $this->log === '' ? $entry : $this->log . ' | ' . $entry;
+
+        return new self(
+            id: $this->id,
+            issueId: $this->issueId,
+            type: $this->type,
+            startedAt: $this->startedAt,
+            endedAt: $this->endedAt,
+            log: $log,
+            note: $this->note,
+            status: 'synced',
+            workItemId: $workItemId,
+        );
+    }
+
+    public function markFailed(string $reason, string $time, string $trigger): self
+    {
+        $entry = "sync failed ({$reason}) at {$time} ({$trigger})";
+        $log = $this->log === '' ? $entry : $this->log . ' | ' . $entry;
+
+        return new self(
+            id: $this->id,
+            issueId: $this->issueId,
+            type: $this->type,
+            startedAt: $this->startedAt,
+            endedAt: $this->endedAt,
+            log: $log,
+            note: $this->note,
+            status: 'failed',
+            workItemId: $this->workItemId,
         );
     }
 
     /** @return array<string, mixed> */
     public function jsonSerialize(): array
     {
-        return [
+        $data = [
             'id' => $this->id,
             'issueId' => $this->issueId,
             'type' => $this->type,
@@ -198,6 +242,11 @@ final class Record implements JsonSerializable
             'note' => $this->note,
             'log' => $this->log,
         ];
+        if ($this->workItemId !== '') {
+            $data['workItemId'] = $this->workItemId;
+        }
+
+        return $data;
     }
 
     /**
@@ -218,6 +267,7 @@ final class Record implements JsonSerializable
             log: self::nullableStr($data, 'log') ?? '',
             note: self::nullableStr($data, 'note') ?? self::nullableStr($data, 'comment') ?? '',
             status: self::nullableStr($data, 'status') ?? 'new',
+            workItemId: self::nullableStr($data, 'workItemId') ?? '',
         );
     }
 

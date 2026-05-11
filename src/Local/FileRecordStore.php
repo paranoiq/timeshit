@@ -5,7 +5,9 @@ namespace Timeshit\Local;
 use Nette\Neon\Neon;
 use RuntimeException;
 
+use function array_flip;
 use function array_map;
+use function array_merge;
 use function array_pop;
 use function array_values;
 use function count;
@@ -35,7 +37,10 @@ final class FileRecordStore implements RecordStore
 
     private int $lockDepth = 0;
 
-    public function __construct(private readonly string $path) {}
+    public function __construct(
+        private readonly string $path,
+        private readonly string $archivePath,
+    ) {}
 
     public function transaction(callable $fn): mixed
     {
@@ -309,5 +314,112 @@ final class FileRecordStore implements RecordStore
         }
 
         return $existing . ' | ' . $more;
+    }
+
+    /**
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function archive(array $ids, string $workItemId, string $time, string $trigger): array
+    {
+        return $this->transaction(function () use ($ids, $workItemId, $time, $trigger): array {
+            $items = $this->load();
+            $idSet = array_flip($ids);
+            $kept = [];
+            $archived = [];
+            foreach ($items as $r) {
+                if (isset($idSet[$r->id])) {
+                    $archived[] = $r->markSynced($workItemId, $time, $trigger);
+                } else {
+                    $kept[] = $r;
+                }
+            }
+            if ($archived === []) {
+                return [];
+            }
+            $this->save($kept);
+            $this->appendArchive($archived);
+
+            return $archived;
+        });
+    }
+
+    /**
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function markFailed(array $ids, string $reason, string $time, string $trigger): array
+    {
+        return $this->transaction(function () use ($ids, $reason, $time, $trigger): array {
+            $items = $this->load();
+            $idSet = array_flip($ids);
+            $updated = [];
+            foreach ($items as $i => $r) {
+                if (isset($idSet[$r->id])) {
+                    $items[$i] = $r->markFailed($reason, $time, $trigger);
+                    $updated[] = $items[$i];
+                }
+            }
+            if ($updated === []) {
+                return [];
+            }
+            $this->save($items);
+
+            return $updated;
+        });
+    }
+
+    /** @return list<Record> */
+    public function loadArchive(): array
+    {
+        return $this->transaction(function (): array {
+            if (!file_exists($this->archivePath)) {
+                return [];
+            }
+            $raw = file_get_contents($this->archivePath);
+            if ($raw === false) {
+                throw new RuntimeException("Failed to read: {$this->archivePath}");
+            }
+            $decoded = Neon::decode($raw);
+            if (!is_array($decoded)) {
+                throw new RuntimeException("Not a NEON map: {$this->archivePath}");
+            }
+            $itemsRaw = $decoded['items'] ?? null;
+            if (!is_array($itemsRaw)) {
+                return [];
+            }
+            $items = [];
+            foreach ($itemsRaw as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $items[] = Record::fromArray($item);
+            }
+
+            return $items;
+        });
+    }
+
+    /** @param list<Record> $newItems */
+    private function appendArchive(array $newItems): void
+    {
+        $this->ensureArchiveDir();
+        $existing = $this->loadArchive();
+        $merged = array_merge($existing, $newItems);
+        $payload = [
+            'items' => array_map(static fn(Record $r): array => $r->jsonSerialize(), $merged),
+        ];
+        $neon = Neon::encode($payload, Neon::BLOCK);
+        if (file_put_contents($this->archivePath, $neon) === false) {
+            throw new RuntimeException("Failed to write: {$this->archivePath}");
+        }
+    }
+
+    private function ensureArchiveDir(): void
+    {
+        $dir = dirname($this->archivePath);
+        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException("Failed to create dir: {$dir}");
+        }
     }
 }

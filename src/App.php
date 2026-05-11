@@ -4,6 +4,7 @@ namespace Timeshit;
 
 use Collator;
 use DateTimeImmutable;
+use DateTimeZone;
 use Exception;
 use Nette\Neon\Neon;
 use RuntimeException;
@@ -21,10 +22,12 @@ use Timeshit\View\RecordsView;
 use Timeshit\View\WorkView;
 use Timeshit\Youtrack\CachedIssueDataProvider;
 use Timeshit\Youtrack\CachedTypeProvider;
+use Timeshit\Youtrack\HttpWorkItemPusher;
 use Timeshit\Youtrack\IssueCache;
 use Timeshit\Youtrack\IssueDataProvider;
 use Timeshit\Youtrack\TypeProvider;
 use Timeshit\Youtrack\WorkItemCache;
+use Timeshit\Youtrack\WorkItemPusher;
 use Timeshit\Youtrack\WorkItemType;
 use Timeshit\Youtrack\WorkItemTypeCache;
 use Timeshit\Youtrack\YoutrackClient;
@@ -37,8 +40,10 @@ use function file_get_contents;
 use function file_put_contents;
 use function implode;
 use function in_array;
+use function intdiv;
 use function is_array;
 use function is_int;
+use function ksort;
 use function max;
 use function mb_strlen;
 use function mb_strtolower;
@@ -63,6 +68,7 @@ final class App
     private const WORK_ITEMS_CACHE_FILE = '/data/work-items.neon';
     private const WORK_ITEM_TYPES_FILE = '/data/work-item-types.neon';
     private const RECORDS_FILE = '/data/records.neon';
+    private const ARCHIVE_FILE = '/data/archive.neon';
 
     public function __construct(
         private readonly Config $config,
@@ -72,6 +78,7 @@ final class App
         private readonly Clock $clock,
         private readonly Io $io,
         private readonly Configurator $configurator,
+        private readonly WorkItemPusher $pusher,
     ) {}
 
     /** Wires the file/network-backed implementations from a project root directory. */
@@ -93,20 +100,22 @@ final class App
 
         return new self(
             config: $config,
-            store: new FileRecordStore($rootDir . self::RECORDS_FILE),
+            store: new FileRecordStore($rootDir . self::RECORDS_FILE, $rootDir . self::ARCHIVE_FILE),
             types: $types,
             issueData: $issueData,
             clock: new SystemClock(),
             io: $io,
             configurator: new Configurator($rootDir, $io),
+            pusher: new HttpWorkItemPusher($client),
         );
     }
 
     private const COMMAND_NAMES = [
         'status', 'issues', 'remote', 'local', 'all', //'types',
         'track', 'interrupt', 'meeting', 'day', 'vacation', 'type', 'switch',
-        'pause', 'resume', 'skip', 'grab', 'put', 'end', 'done', 'note', 'edit', 'refresh',
+        'pause', 'resume', 'continue', 'skip', 'grab', 'put', 'end', 'done', 'note', 'edit', 'refresh',
         'at', 'before', 'after',
+        'push',
         'checkout',
         //'configure',
         'help',
@@ -153,7 +162,7 @@ final class App
                 'types' => $this->cmdTypes(),
                 'switch' => $this->cmdSwitch($argv[2] ?? null),
                 'pause' => $this->cmdPause(Resolver::restArgs($argv)),
-                'resume' => $this->cmdResume(Resolver::restArgs($argv)),
+                'resume', 'continue' => $this->cmdResume(Resolver::restArgs($argv)),
                 'skip' => $this->cmdSkip($argv[2] ?? null),
                 'grab' => $this->cmdGrab($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
                 'put' => $this->cmdPut($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
@@ -164,6 +173,7 @@ final class App
                 'at' => $this->cmdAt($argv[2] ?? null),
                 'before' => $this->cmdBefore($argv[2] ?? null),
                 'after' => $this->cmdAfter($argv[2] ?? null),
+                'push' => $this->cmdPush($argv[2] ?? null),
                 'configure' => $this->configurator->run(),
                 default => throw new RuntimeException("dispatch: no handler for resolved command '{$resolved}'"),
             };
@@ -254,7 +264,7 @@ final class App
         $app = static fn(string $name): string => Ansi::lblue($name);
 
         $groups = [
-            'Lists' => [
+            'Info' => [
                 [$cmd('status'),   '', 'Show the currently active record (if any) and the last closed one'],
                 [$cmd('issues'),   '', 'List ' . $app('YouTrack') . ' issues you are involved in (cached for 24h)'],
                 [$cmd('remote'),   '', 'List time entries already on ' . $app('YouTrack') . ' (cached for 24h)'],
@@ -267,7 +277,7 @@ final class App
                 [$cmd('interrupt'),$req('issue') . ' ' . $opt('type'), 'Like ' . $cmd('track') . ', but mark the currently open record as paused (auto-resumed by ' . $cmd('done') . ')'],
                 [$cmd('meeting'),  $opt('note'), 'Like ' . $cmd('interrupt') . ', but uses ' . Ansi::lgreen('defaultMeetingIssue') . ' / ' . Ansi::lgreen('defaultMeetingType') . ' from config'],
                 [$cmd('pause'),    $opt('note'), 'Pause the current entry'],
-                [$cmd('resume'),   $opt('note'), 'Resume tracking from the most recent entry'],
+                [$cmd('resume'),   $opt('note'), 'Resume tracking from the most recent entry (alias: ' . $cmd('continue') . ')'],
                 [$cmd('done'),     $opt('note'), 'End the current entry and auto-resume the most recently interrupted one'],
                 [$cmd('end'),      $opt('note'), 'End the current entry'],
                 [$cmd('switch'),   $req('type'), 'End current entry and start same one with different ' . $req('type')],
@@ -287,25 +297,23 @@ final class App
             ],
             'Sync' => [
                 [$cmd('refresh'),  '', 'Refresh all caches from YouTrack'],
+                [$cmd('push'),     $opt('date'), 'Sum closed records by (day, issue, type) up to ' . $req('date') . ' (default: ' . $val('yesterday') . ') and create work items in ' . $app('YouTrack')],
             ],
             'Triggers' => [
                 [$cmd('checkout'), $req('branch') . ' ' . $req('repo'), 'Switch tracking on git checkout (called from ' . $cmd('hooks/post-checkout') . ')'],
             ],
         ];
 
-        $typeDesc = 'work-item type; see ' . $cmd('types') . ' for the allowed list'
-            . '. Default: ' . Ansi::lgreen($config->defaultTrackType) . ' (' . $cmd('track') . ' / ' . $cmd('grab') . ')';
-
         $argRows = [
-            [$req('issue'),   'YouTrack issue id, e.g. ' . $val('SW-1234') . ' or just ' . $val('1234')],
-            [$req('type'),    $typeDesc],
-            [$req('span'),    'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ', ' . $val('1d 4h 15m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m') . ', case- and whitespace-insensitive)'],
-            [$req('time'),    $val('HH:MM') . ' or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
-            [$req('date'),    'expressions like ' . $val('yesterday') . ' / ' . $val('yes') . ' / ' . $val('y') . ', day-of-month int (e.g. ' . $val('15') . '), or full date. Default: ' . $val('today')],
-            [$req('note'),    'free-form text; appended to the record\'s existing note'],
-            [$req('id'),      'numeric record id (the ' . Ansi::lblack('#N') . ' column shown by ' . $cmd('local') . ' / ' . $cmd('status') . ')'],
-            [$req('branch'),  'git branch name (used to extract the issue id; passed by git hook)'],
-            [$req('repo'),    'repository name (passed by git hook)'],
+            [$req('issue'),  'YouTrack issue id, e.g. ' . $val('SW-1234') . ' or just ' . $val('1234')],
+            [$req('type'),   'work-item type; see ' . $cmd('types') . ' for the allowed list. Default: ' . Ansi::lgreen($config->defaultTrackType)],
+            [$req('span'),   'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m')],
+            [$req('time'),   $val('HH:MM') . ' or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
+            [$req('date'),   'expressions like ' . $val('yesterday') . ' / ' . $val('yes') . ' / ' . $val('y') . ', day-of-month (e.g. ' . $val('15') . ') or full date. Default: ' . $val('today')],
+            [$req('note'),   'free-form text; appended to the record\'s existing note'],
+            [$req('id'),     'numeric record id (the ' . Ansi::lblack('#n') . ' column shown by ' . $cmd('local') . ' / ' . $cmd('status') . ')'],
+            [$req('branch'), 'git branch name (used to extract the issue id; passed by git hook)'],
+            [$req('repo'),   'repository name (passed by git hook)'],
         ];
 
         $nameWidth = 0;
@@ -1395,6 +1403,154 @@ final class App
         }
 
         return in_array(strtolower(trim($line)), ['y', 'yes'], true);
+    }
+
+    private function cmdPush(?string $dateArg): void
+    {
+        $cutoffKey = Resolver::resolveDate($dateArg ?? 'yesterday', 'push')->format('Y-m-d');
+
+        $records = $this->store->load();
+        /** @var list<Record> $eligible */
+        $eligible = [];
+        foreach ($records as $r) {
+            if ($r->isOpen()) {
+                continue;
+            }
+            if ($r->status === 'synced' || $r->status === 'untracked') {
+                continue;
+            }
+            if ($r->issueId === '') {
+                continue;
+            }
+            $date = substr($r->startedAt, 0, 10);
+            if ($date > $cutoffKey) {
+                continue;
+            }
+            $eligible[] = $r;
+        }
+        if ($eligible === []) {
+            $this->io->err("Nothing to push (cutoff: {$cutoffKey}).\n");
+
+            return;
+        }
+
+        /** @var array<string, array{date: string, issueId: string, type: string, minutes: int, ids: list<int>, notes: list<string>}> $groups */
+        $groups = [];
+        foreach ($eligible as $r) {
+            $date = substr($r->startedAt, 0, 10);
+            $key = $date . '|' . $r->issueId . '|' . $r->type;
+            if (!isset($groups[$key])) {
+                $groups[$key] = [
+                    'date' => $date,
+                    'issueId' => $r->issueId,
+                    'type' => $r->type,
+                    'minutes' => 0,
+                    'ids' => [],
+                    'notes' => [],
+                ];
+            }
+            $groups[$key]['minutes'] += self::recordMinutes($r);
+            $groups[$key]['ids'][] = $r->id;
+            if ($r->note !== '' && !in_array($r->note, $groups[$key]['notes'], true)) {
+                $groups[$key]['notes'][] = $r->note;
+            }
+        }
+        ksort($groups);
+
+        $typeNameToId = [];
+        foreach ($this->types->types() as $t) {
+            $typeNameToId[$t->name] = $t->id;
+        }
+
+        $tz = new DateTimeZone($this->config->timezone);
+        $succeeded = 0;
+        $failed = 0;
+
+        foreach ($groups as $g) {
+            if ($g['minutes'] <= 0) {
+                $this->io->err(Ansi::lyellow(sprintf(
+                    "Skipped %s (%s) on %s — zero minutes\n",
+                    $g['issueId'],
+                    $g['type'],
+                    $g['date'],
+                )));
+                continue;
+            }
+            $typeId = $typeNameToId[$g['type']] ?? null;
+            if ($typeId === null) {
+                $reason = "unknown work-item type '{$g['type']}'";
+                $this->store->markFailed($g['ids'], $reason, $this->clock->nowMinute(), 'push');
+                $this->printPushFailure($g, $reason);
+                $failed++;
+                continue;
+            }
+            try {
+                $dateMs = (new DateTimeImmutable($g['date'], $tz))->getTimestamp() * 1000;
+            } catch (Exception) {
+                $reason = "invalid date '{$g['date']}'";
+                $this->store->markFailed($g['ids'], $reason, $this->clock->nowMinute(), 'push');
+                $this->printPushFailure($g, $reason);
+                $failed++;
+                continue;
+            }
+            $text = implode(' | ', $g['notes']);
+            try {
+                $workItemId = $this->pusher->push($g['issueId'], $dateMs, $g['minutes'], $typeId, $text);
+            } catch (RuntimeException $e) {
+                $this->store->markFailed($g['ids'], $e->getMessage(), $this->clock->nowMinute(), 'push');
+                $this->printPushFailure($g, $e->getMessage());
+                $failed++;
+                continue;
+            }
+            $this->store->archive($g['ids'], $workItemId, $this->clock->nowMinute(), 'push');
+            $this->printPushSuccess($g, $workItemId);
+            $succeeded++;
+        }
+
+        $this->io->err(sprintf("\nPushed: %d, failed: %d (cutoff %s)\n", $succeeded, $failed, $cutoffKey));
+    }
+
+    private static function recordMinutes(Record $r): int
+    {
+        if ($r->endedAt === null) {
+            return 0;
+        }
+        try {
+            $s = new DateTimeImmutable($r->startedAt);
+            $e = new DateTimeImmutable($r->endedAt);
+        } catch (Exception) {
+            return 0;
+        }
+
+        return max(0, intdiv($e->getTimestamp() - $s->getTimestamp(), 60));
+    }
+
+    /** @param array{date: string, issueId: string, type: string, minutes: int, ids: list<int>, notes: list<string>} $g */
+    private function printPushSuccess(array $g, string $workItemId): void
+    {
+        $this->io->err(sprintf(
+            "%s %s %s  %s  %s → %s\n",
+            Ansi::lgreen('✓'),
+            $g['issueId'],
+            $g['date'],
+            Format::type($g['type']),
+            Format::minutes($g['minutes']),
+            $workItemId,
+        ));
+    }
+
+    /** @param array{date: string, issueId: string, type: string, minutes: int, ids: list<int>, notes: list<string>} $g */
+    private function printPushFailure(array $g, string $reason): void
+    {
+        $this->io->err(sprintf(
+            "%s %s %s  %s  %s — %s\n",
+            Ansi::red('✗'),
+            $g['issueId'],
+            $g['date'],
+            Format::type($g['type']),
+            Format::minutes($g['minutes']),
+            Ansi::red($reason),
+        ));
     }
 
 }

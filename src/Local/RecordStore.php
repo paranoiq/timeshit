@@ -74,4 +74,28 @@ interface RecordStore
      * @return array{changed: bool, item: ?Record}
      */
     public function noteLast(string $note, string $modifiedAt, string $trigger): array;
+
+    /**
+     * Removes the records with the given ids from the active store, applies
+     * `markSynced($workItemId, $time, $trigger)` to each, and appends them to
+     * the archive. Records not currently in the active store are silently
+     * ignored. Returns the archived records (post-mutation).
+     *
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function archive(array $ids, string $workItemId, string $time, string $trigger): array;
+
+    /**
+     * Applies `markFailed($reason, $time, $trigger)` to each record with a
+     * matching id and saves the active store. Records not present are
+     * silently ignored. Returns the updated records.
+     *
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function markFailed(array $ids, string $reason, string $time, string $trigger): array;
+
+    /** @return list<Record> */
+    public function loadArchive(): array;
 }

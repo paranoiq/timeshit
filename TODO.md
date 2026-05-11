@@ -6,7 +6,6 @@ todo:
 - server will periodically save time and auto-end current record if computer was off for some time
 - show all week-days in work list. red if empty
 - status will show all paused records
-- edit command (vim, nano, sublime...)
 - delete command
 - sync command
 - review/test command

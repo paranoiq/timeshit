@@ -29,7 +29,12 @@ final class Format
     {
         $start = new DateTimeImmutable($startedAt);
         $end = new DateTimeImmutable($endedAt);
-        $minutes = max(0, intdiv($end->getTimestamp() - $start->getTimestamp(), 60));
+
+        return self::minutes(max(0, intdiv($end->getTimestamp() - $start->getTimestamp(), 60)));
+    }
+
+    public static function minutes(int $minutes): string
+    {
         if ($minutes < 60) {
             return "{$minutes}m";
         }

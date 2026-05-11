@@ -266,10 +266,10 @@ Assert::contains('missing <span>', $io->getErr());
 Assert::same(1, $app->run(['ts', 'put', 'ABC-1', 'garbage']));
 Assert::contains("put: invalid span 'garbage'", $io->getErr());
 
-// 10s. `pu` prefix resolves uniquely to put (since `p` now matches both pause and put,
-//      adding `put` makes the previously-unique single-letter `p` shortcut ambiguous)
+// 10s. `put` resolves to put (no shorter unique prefix exists — `p` matches
+//      pause/put/push, `pu` matches put/push)
 [$app, $store] = newApp('2026-05-09 14:30');
-Assert::same(0, $app->run(['ts', 'pu', 'ABC-1', '20m']));
+Assert::same(0, $app->run(['ts', 'put', 'ABC-1', '20m']));
 Assert::count(1, $store->load());
 
 
