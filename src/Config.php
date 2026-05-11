@@ -11,6 +11,7 @@ use function in_array;
 use function is_array;
 use function is_file;
 use function is_string;
+use function mb_strtolower;
 
 final class Config
 {
@@ -19,6 +20,7 @@ final class Config
 
     /**
      * @param list<string> $allowedTypes
+     * @param array<string, list<string>> $typeAliases canonical type name => list of aliases (sparse — only types that have aliases)
      * @param list<string> $interruptionTypes
      */
     public function __construct(
@@ -27,9 +29,14 @@ final class Config
         public readonly string $timezone,
         public readonly string $defaultIssuePrefix,
         public readonly array $allowedTypes,
+        public readonly array $typeAliases,
         public readonly string $defaultTrackType,
         public readonly string $defaultDayType,
         public readonly array $interruptionTypes,
+        public readonly string $defaultMeetingType,
+        public readonly string $defaultMeetingIssue,
+        public readonly string $defaultOutOfOfficeType,
+        public readonly string $defaultOutOfOfficeIssue,
     ) {}
 
     public static function load(string $rootDir): self
@@ -49,9 +56,14 @@ final class Config
             $cfg['timezone'],
             $cfg['defaultIssuePrefix'],
             $cfg['allowedTypes'],
+            $cfg['typeAliases'],
             $cfg['defaultTrackType'],
             $cfg['defaultDayType'],
             $cfg['interruptionTypes'],
+            $cfg['defaultMeetingType'],
+            $cfg['defaultMeetingIssue'],
+            $cfg['defaultOutOfOfficeType'],
+            $cfg['defaultOutOfOfficeIssue'],
         );
     }
 
@@ -65,7 +77,7 @@ final class Config
         return self::readConfig($rootDir)['timezone'];
     }
 
-    /** @return array{youtrackBaseUrl: string, timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>} */
+    /** @return array{youtrackBaseUrl: string, timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, typeAliases: array<string, list<string>>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>, defaultMeetingType: string, defaultMeetingIssue: string, defaultOutOfOfficeType: string, defaultOutOfOfficeIssue: string} */
     private static function readConfig(string $rootDir): array
     {
         $path = $rootDir . self::CONFIG_FILE;
@@ -93,19 +105,88 @@ final class Config
             }
             $names[] = $name;
         }
+        $typeAliases = self::readTypeAliases($data, $names, $path);
         $defaultTrackType = self::requireDefaultType($data, 'defaultTrackType', $names, $path);
         $defaultDayType = self::requireDefaultType($data, 'defaultDayType', $names, $path);
+        $defaultMeetingType = self::requireDefaultType($data, 'defaultMeetingType', $names, $path);
+        $defaultOutOfOfficeType = self::requireDefaultType($data, 'defaultOutOfOfficeType', $names, $path);
         $interruptionTypes = self::readInterruptionTypes($data, $names, $defaultTrackType, $path);
+        $defaultMeetingIssue = $data['defaultMeetingIssue'] ?? null;
+        if (!is_string($defaultMeetingIssue) || $defaultMeetingIssue === '') {
+            throw new RuntimeException("Missing defaultMeetingIssue in {$path}");
+        }
+        $defaultOutOfOfficeIssue = $data['defaultOutOfOfficeIssue'] ?? null;
+        if (!is_string($defaultOutOfOfficeIssue) || $defaultOutOfOfficeIssue === '') {
+            throw new RuntimeException("Missing defaultOutOfOfficeIssue in {$path}");
+        }
 
         return [
             'youtrackBaseUrl' => $baseUrl,
             'timezone' => $timezone,
             'defaultIssuePrefix' => $defaultIssuePrefix,
             'allowedTypes' => $names,
+            'typeAliases' => $typeAliases,
             'defaultTrackType' => $defaultTrackType,
             'defaultDayType' => $defaultDayType,
             'interruptionTypes' => $interruptionTypes,
+            'defaultMeetingType' => $defaultMeetingType,
+            'defaultMeetingIssue' => $defaultMeetingIssue,
+            'defaultOutOfOfficeType' => $defaultOutOfOfficeType,
+            'defaultOutOfOfficeIssue' => $defaultOutOfOfficeIssue,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param list<string> $allowedNames
+     * @return array<string, list<string>>
+     */
+    private static function readTypeAliases(array $data, array $allowedNames, string $path): array
+    {
+        $value = $data['typeAliases'] ?? [];
+        if (!is_array($value)) {
+            throw new RuntimeException("Invalid typeAliases in {$path} (expected a map)");
+        }
+        $seenLower = [];
+        foreach ($allowedNames as $name) {
+            $seenLower[mb_strtolower($name)] = "canonical type '{$name}'";
+        }
+        $result = [];
+        foreach ($value as $canonical => $aliases) {
+            if (!is_string($canonical) || $canonical === '') {
+                throw new RuntimeException("Invalid typeAliases key in {$path} (expected non-empty string)");
+            }
+            if (!in_array($canonical, $allowedNames, true)) {
+                throw new RuntimeException(
+                    "typeAliases key '{$canonical}' in {$path} is not one of allowedTypes (" . implode(', ', $allowedNames) . ')',
+                );
+            }
+            if (!is_array($aliases)) {
+                throw new RuntimeException("Invalid typeAliases value for '{$canonical}' in {$path} (expected a list)");
+            }
+            $list = [];
+            foreach ($aliases as $alias) {
+                if (!is_string($alias) || $alias === '') {
+                    throw new RuntimeException(
+                        "Invalid typeAliases entry under '{$canonical}' in {$path} (expected non-empty strings)",
+                    );
+                }
+                $key = mb_strtolower($alias);
+                if (isset($seenLower[$key])) {
+                    throw new RuntimeException(
+                        "typeAliases entry '{$alias}' under '{$canonical}' in {$path} collides with {$seenLower[$key]}",
+                    );
+                }
+                $seenLower[$key] = "alias '{$alias}' under '{$canonical}'";
+                $list[] = $alias;
+            }
+            if ($list === []) {
+                continue;
+            }
+            $result[$canonical] = $list;
+        }
+
+        return $result;
     }
 
     /**

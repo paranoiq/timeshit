@@ -120,3 +120,58 @@ Assert::exception(
     RuntimeException::class,
     "#^switch: unknown type 'inv'#",
 );
+
+// --- aliases ----------------------------------------------------------------
+
+$aliases = [
+    'Analyses / Design' => ['Design'],
+    'Communication, Meetings, ...' => ['Meeting'],
+    'Test / Review' => ['Review'],
+];
+
+// Exact alias match (case-insensitive) resolves to the canonical name.
+Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'Design',  $types, $allowed, $aliases));
+Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'design',  $types, $allowed, $aliases));
+Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'Meeting', $types, $allowed, $aliases));
+Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'MEETING', $types, $allowed, $aliases));
+Assert::same('Test / Review',                Resolver::matchType('cmd', 'Review',  $types, $allowed, $aliases));
+
+// Prefix of an alias resolves to its canonical.
+Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'm',     $types, $allowed, $aliases));
+Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'mee',   $types, $allowed, $aliases));
+Assert::same('Communication, Meetings, ...', Resolver::matchType('cmd', 'meet',  $types, $allowed, $aliases));
+Assert::same('Test / Review',                Resolver::matchType('cmd', 'r',     $types, $allowed, $aliases));
+Assert::same('Test / Review',                Resolver::matchType('cmd', 'rev',   $types, $allowed, $aliases));
+Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'des',   $types, $allowed, $aliases));
+Assert::same('Analyses / Design',            Resolver::matchType('cmd', 'design', $types, $allowed, $aliases));
+
+// A prefix that hits both a canonical and an alias of distinct types is ambiguous.
+// 'd' now matches both Documentation (canonical) and Design (alias → Analyses / Design).
+Assert::exception(
+    static fn() => Resolver::matchType('cmd', 'd', $types, $allowed, $aliases),
+    RuntimeException::class,
+    "#ambiguous type 'd'#",
+);
+
+// A prefix that hits the same canonical via multiple labels (canonical + alias) is NOT ambiguous.
+// 'an' matches only 'Analyses / Design' (the alias 'Design' doesn't start with 'an').
+Assert::same('Analyses / Design', Resolver::matchType('cmd', 'an', $types, $allowed, $aliases));
+
+// Unknown error message lists aliases alongside their canonical.
+Assert::exception(
+    static fn() => Resolver::matchType('day', 'xyz', $types, $allowed, $aliases),
+    RuntimeException::class,
+    "#day: unknown type 'xyz'\\. Allowed: Implementation, Out of office, Documentation, Test / Review \\(Review\\), Analyses / Design \\(Design\\), Communication, Meetings, \\.\\.\\. \\(Meeting\\)#",
+);
+
+// Aliases of disallowed types are invisible — alias map entries pointing at disallowed
+// types are still recorded in the alias array but matching only sees the allowed slice.
+$narrow = ['Implementation', 'Documentation'];
+Assert::exception(
+    static fn() => Resolver::matchType('cmd', 'Design', $types, $narrow, $aliases),
+    RuntimeException::class,
+    "#unknown type 'Design'#",
+);
+
+// Exact canonical match still wins over any kind of prefix match.
+Assert::same('Documentation', Resolver::matchType('cmd', 'Documentation', $types, $allowed, $aliases));

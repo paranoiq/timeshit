@@ -40,7 +40,7 @@ final class Record implements JsonSerializable
         public readonly string $startedAt,
         public readonly ?string $endedAt,
         public readonly string $log,
-        public readonly string $comment = '',
+        public readonly string $note = '',
         public readonly string $status = 'new',
     ) {}
 
@@ -78,12 +78,12 @@ final class Record implements JsonSerializable
             startedAt: $this->startedAt,
             endedAt: $this->endedAt,
             log: $this->log === '' ? $entry : $this->log . ' | ' . $entry,
-            comment: $this->comment,
+            note: $this->note,
             status: $this->status,
         );
     }
 
-    public function withEnd(string $endedAt, string $trigger, ?string $comment = null): self
+    public function withEnd(string $endedAt, string $trigger, ?string $note = null): self
     {
         $entry = self::logClosed($endedAt, $trigger);
         $log = $this->log === '' ? $entry : $this->log . ' | ' . $entry;
@@ -95,7 +95,7 @@ final class Record implements JsonSerializable
             startedAt: $this->startedAt,
             endedAt: $endedAt,
             log: $log,
-            comment: $comment ?? $this->comment,
+            note: $note ?? $this->note,
             status: $this->status,
         );
     }
@@ -112,14 +112,14 @@ final class Record implements JsonSerializable
             startedAt: $this->startedAt,
             endedAt: $this->endedAt,
             log: $log,
-            comment: $this->comment,
+            note: $this->note,
             status: $this->status,
         );
     }
 
-    public function withComment(string $comment, string $modifiedAt, string $trigger): self
+    public function withNote(string $note, string $modifiedAt, string $trigger): self
     {
-        $entry = self::logUpdate('comment', '', $modifiedAt, $trigger);
+        $entry = self::logUpdate('note', '', $modifiedAt, $trigger);
         $log = $this->log === '' ? $entry : $this->log . ' | ' . $entry;
 
         return new self(
@@ -129,7 +129,7 @@ final class Record implements JsonSerializable
             startedAt: $this->startedAt,
             endedAt: $this->endedAt,
             log: $log,
-            comment: $comment,
+            note: $note,
             status: $this->status,
         );
     }
@@ -146,7 +146,7 @@ final class Record implements JsonSerializable
             startedAt: $startedAt,
             endedAt: $this->endedAt,
             log: $log,
-            comment: $this->comment,
+            note: $this->note,
             status: $this->status,
         );
     }
@@ -166,7 +166,7 @@ final class Record implements JsonSerializable
             startedAt: $this->startedAt,
             endedAt: $endedAt,
             log: $log,
-            comment: $this->comment,
+            note: $this->note,
             status: $this->status,
         );
     }
@@ -180,7 +180,7 @@ final class Record implements JsonSerializable
             startedAt: $this->startedAt,
             endedAt: $this->endedAt,
             log: $this->log,
-            comment: $this->comment,
+            note: $this->note,
             status: $status,
         );
     }
@@ -195,7 +195,7 @@ final class Record implements JsonSerializable
             'status' => $this->status,
             'startedAt' => $this->startedAt,
             'endedAt' => $this->endedAt,
-            'comment' => $this->comment,
+            'note' => $this->note,
             'log' => $this->log,
         ];
     }
@@ -216,7 +216,7 @@ final class Record implements JsonSerializable
             startedAt: self::str($data, 'startedAt'),
             endedAt: self::nullableStr($data, 'endedAt'),
             log: self::nullableStr($data, 'log') ?? '',
-            comment: self::nullableStr($data, 'comment') ?? '',
+            note: self::nullableStr($data, 'note') ?? self::nullableStr($data, 'comment') ?? '',
             status: self::nullableStr($data, 'status') ?? 'new',
         );
     }

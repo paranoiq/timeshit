@@ -23,6 +23,7 @@ use function strpos;
 use function substr;
 
 use const CURLINFO_HTTP_CODE;
+use const CURLOPT_CONNECTTIMEOUT;
 use const CURLOPT_HTTPHEADER;
 use const CURLOPT_RETURNTRANSFER;
 use const CURLOPT_TIMEOUT;
@@ -174,7 +175,8 @@ final class YoutrackClient
         }
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 30,
+            CURLOPT_CONNECTTIMEOUT => 1,
+            CURLOPT_TIMEOUT => 1,
             CURLOPT_HTTPHEADER => [
                 'Authorization: Bearer ' . $this->token,
                 'Accept: application/json',

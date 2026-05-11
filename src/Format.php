@@ -105,6 +105,16 @@ final class Format
         return $isMe ? Ansi::lgreen($padded) : $padded;
     }
 
+    public static function status(string $status): string
+    {
+        return match ($status) {
+            'paused' => Ansi::lyellow($status),
+            'synced' => Ansi::lgreen($status),
+            'failed' => Ansi::lred($status),
+            default  => Ansi::lblack($status),
+        };
+    }
+
     public static function type(string $type): string
     {
         $normalized = preg_replace('/\s*\/\s*/', '/', $type) ?? $type;

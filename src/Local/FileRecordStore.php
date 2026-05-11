@@ -246,9 +246,9 @@ final class FileRecordStore implements RecordStore
     }
 
     /** @return array{ended: bool, item: ?Record} */
-    public function endOpen(string $endedAt, string $trigger, ?string $appendComment, bool $pauseClosed = false): array
+    public function endOpen(string $endedAt, string $trigger, ?string $appendNote, bool $pauseClosed = false): array
     {
-        return $this->transaction(function () use ($endedAt, $trigger, $appendComment, $pauseClosed): array {
+        return $this->transaction(function () use ($endedAt, $trigger, $appendNote, $pauseClosed): array {
             $items = $this->load();
             $last = array_pop($items);
             if ($last === null || !$last->isOpen()) {
@@ -258,9 +258,9 @@ final class FileRecordStore implements RecordStore
 
                 return ['ended' => false, 'item' => null];
             }
-            $closed = $appendComment === null
+            $closed = $appendNote === null
                 ? $last->withEnd($endedAt, $trigger)
-                : $last->withEnd($endedAt, $trigger, self::mergeComment($last->comment, $appendComment));
+                : $last->withEnd($endedAt, $trigger, self::mergeNote($last->note, $appendNote));
             if ($pauseClosed) {
                 $closed = $closed->withStatus('paused');
             }
@@ -272,9 +272,9 @@ final class FileRecordStore implements RecordStore
     }
 
     /** @return array{changed: bool, item: ?Record} */
-    public function commentLast(string $comment, string $modifiedAt, string $trigger): array
+    public function noteLast(string $note, string $modifiedAt, string $trigger): array
     {
-        return $this->transaction(function () use ($comment, $modifiedAt, $trigger): array {
+        return $this->transaction(function () use ($note, $modifiedAt, $trigger): array {
             $items = $this->load();
             $targetIndex = null;
             for ($i = count($items) - 1; $i >= 0; $i--) {
@@ -288,18 +288,18 @@ final class FileRecordStore implements RecordStore
                 return ['changed' => false, 'item' => null];
             }
             $target = $items[$targetIndex];
-            $merged = self::mergeComment($target->comment, $comment);
-            if ($merged === $target->comment) {
+            $merged = self::mergeNote($target->note, $note);
+            if ($merged === $target->note) {
                 return ['changed' => false, 'item' => $target];
             }
-            $items[$targetIndex] = $target->withComment($merged, $modifiedAt, $trigger);
+            $items[$targetIndex] = $target->withNote($merged, $modifiedAt, $trigger);
             $this->save(array_values($items));
 
             return ['changed' => true, 'item' => $items[$targetIndex]];
         });
     }
 
-    private static function mergeComment(string $existing, string $more): string
+    private static function mergeNote(string $existing, string $more): string
     {
         if ($more === '') {
             return $existing;

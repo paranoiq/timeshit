@@ -118,7 +118,7 @@ $clock->advance('+20 minutes');
 $app->run(['ts', 'done', 'meeting', 'over']);
 $items = $store->load();
 Assert::contains('closed at 2026-05-09 10:50 (done)', $items[1]->log);
-Assert::same('meeting over', $items[1]->comment);
+Assert::same('meeting over', $items[1]->note);
 
 // 9. done auto-resumes any status='paused' record (manual pause and interruption alike)
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
@@ -288,6 +288,77 @@ $items = $store->load();
 Assert::count(1, $items);
 Assert::same('not-id', $items[0]->issueId);
 Assert::contains('unusual issue id format', $io->getErr());
+
+
+// === meeting ===
+//
+// `meeting` is a thin shorthand for `interrupt $defaultMeetingIssue
+// $defaultMeetingType` with an optional comment that lands on the new meeting
+// record. Force-pauses the open record like `interrupt`; pairs with `done` to
+// auto-resume.
+
+// 25. meeting with no open record creates a meeting record using config defaults
+[$app, $store, , $io] = newApp('2026-05-09 10:00');
+Assert::same(0, $app->run(['ts', 'meeting']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('SW-4002', $items[0]->issueId);             // from defaultMeetingIssue
+Assert::same('Communication, Meetings, ...', $items[0]->type); // from defaultMeetingType
+Assert::same('created at 2026-05-09 10:00 (meeting)', $items[0]->log);
+Assert::null($items[0]->endedAt);
+Assert::same('new', $items[0]->status);
+Assert::same('', $items[0]->note);
+
+// 26. meeting force-pauses the open record regardless of types (like interrupt):
+//     open Documentation → meeting flips it to 'paused'.
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1', 'doc']);              // Documentation
+$clock->advance('+30 minutes');
+Assert::same(0, $app->run(['ts', 'meeting']));
+$items = $store->load();
+Assert::count(2, $items);
+Assert::same('Documentation', $items[0]->type);
+Assert::same('paused', $items[0]->status);
+Assert::contains('closed at 2026-05-09 10:30 (meeting)', $items[0]->log);
+Assert::same('SW-4002', $items[1]->issueId);
+Assert::same('Communication, Meetings, ...', $items[1]->type);
+Assert::contains('created at 2026-05-09 10:30 (meeting)', $items[1]->log);
+Assert::null($items[1]->endedAt);
+
+// 27. meeting with an optional comment lands the comment on the new meeting record
+//     (NOT on the closed/paused predecessor — same shape as `pause`)
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+15 minutes');
+$app->run(['ts', 'meeting', 'standup', 'with', 'team']);
+$items = $store->load();
+Assert::count(2, $items);
+Assert::same('', $items[0]->note);                    // not on the paused predecessor
+Assert::same('standup with team', $items[1]->note);   // on the meeting record
+Assert::same('paused', $items[0]->status);
+
+// 28. meeting + done auto-resumes the original (the whole point of meeting/interrupt)
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'meeting']);
+$clock->advance('+15 minutes');
+$app->run(['ts', 'done']);
+$items = $store->load();
+Assert::count(3, $items);
+Assert::same('paused', $items[0]->status);
+Assert::same('SW-4002', $items[1]->issueId);
+Assert::contains('closed at 2026-05-09 10:45 (done)', $items[1]->log);
+Assert::same('ABC-1', $items[2]->issueId);
+Assert::same('Implementation', $items[2]->type);
+Assert::contains('created at 2026-05-09 10:45 (done)', $items[2]->log);
+Assert::null($items[2]->endedAt);
+
+// 29. `m` prefix resolves uniquely to meeting
+[$app, $store] = newApp('2026-05-09 10:00');
+Assert::same(0, $app->run(['ts', 'm']));
+$items = $store->load();
+Assert::same('SW-4002', $items[0]->issueId);
 
 
 // === status field lifecycle ===

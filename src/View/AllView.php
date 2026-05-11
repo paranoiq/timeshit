@@ -50,11 +50,12 @@ final class AllView
         }
 
         $now = time();
-        /** @var list<array{status: string, date: string, minutes: int, issueId: string, recordId: ?int, type: string, text: string}> $rows */
+        /** @var list<array{status: string, recordStatus: ?string, date: string, minutes: int, issueId: string, recordId: ?int, type: string, text: string}> $rows */
         $rows = [];
         foreach ($workItems as $wi) {
             $rows[] = [
                 'status' => 'synced',
+                'recordStatus' => null,
                 'date' => $wi->date,
                 'minutes' => $wi->minutes,
                 'issueId' => $wi->issueId,
@@ -71,12 +72,13 @@ final class AllView
             $minutes = max(0, intdiv($end - $start, 60));
             $rows[] = [
                 'status' => 'local',
+                'recordStatus' => $r->status,
                 'date' => substr($r->startedAt, 0, 10),
                 'minutes' => $minutes,
                 'issueId' => $r->issueId,
                 'recordId' => $r->id,
                 'type' => $r->type,
-                'text' => $r->comment,
+                'text' => $r->note,
             ];
         }
         usort($rows, static fn(array $a, array $b): int => $b['date'] <=> $a['date']);
@@ -130,14 +132,16 @@ final class AllView
             $text = $row['recordId'] !== null
                 ? '  ' . Format::recordId($row['recordId']) . $textTail
                 : ($textTail === '' ? '' : ' ' . $textTail);
+            $recordStatus = $row['recordStatus'] !== null ? '  ' . Format::status($row['recordStatus']) : '';
             echo sprintf(
-                "    %s %s  %s  %s  %s%s\n",
+                "    %s %s  %s  %s  %s%s%s\n",
                 self::statusIndicator($row['status']),
                 Ansi::link($url, sprintf('%-12s', $row['issueId'])),
                 Format::spent($row['minutes']),
                 $type,
                 $title,
                 $text,
+                $recordStatus,
             );
         }
     }

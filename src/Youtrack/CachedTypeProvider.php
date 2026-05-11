@@ -2,6 +2,8 @@
 
 namespace Timeshit\Youtrack;
 
+use RuntimeException;
+use Timeshit\Util\Ansi;
 use Timeshit\Util\Io;
 use function count;
 use function sprintf;
@@ -20,7 +22,14 @@ final class CachedTypeProvider implements TypeProvider
         if ($this->cache->isFresh()) {
             return $this->cache->load();
         }
-        $this->refresh();
+        try {
+            $this->refresh();
+        } catch (RuntimeException $e) {
+            $this->io->err(Ansi::lyellow("Offline ({$e->getMessage()}); using cached work-item types") . "\n");
+            if (!$this->cache->exists()) {
+                return [];
+            }
+        }
 
         return $this->cache->load();
     }

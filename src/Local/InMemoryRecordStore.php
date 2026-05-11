@@ -123,16 +123,16 @@ final class InMemoryRecordStore implements RecordStore
     }
 
     /** @return array{ended: bool, item: ?Record} */
-    public function endOpen(string $endedAt, string $trigger, ?string $appendComment, bool $pauseClosed = false): array
+    public function endOpen(string $endedAt, string $trigger, ?string $appendNote, bool $pauseClosed = false): array
     {
         $items = $this->items;
         $last = array_pop($items);
         if ($last === null || !$last->isOpen()) {
             return ['ended' => false, 'item' => null];
         }
-        $closed = $appendComment === null
+        $closed = $appendNote === null
             ? $last->withEnd($endedAt, $trigger)
-            : $last->withEnd($endedAt, $trigger, self::mergeComment($last->comment, $appendComment));
+            : $last->withEnd($endedAt, $trigger, self::mergeNote($last->note, $appendNote));
         if ($pauseClosed) {
             $closed = $closed->withStatus('paused');
         }
@@ -143,7 +143,7 @@ final class InMemoryRecordStore implements RecordStore
     }
 
     /** @return array{changed: bool, item: ?Record} */
-    public function commentLast(string $comment, string $modifiedAt, string $trigger): array
+    public function noteLast(string $note, string $modifiedAt, string $trigger): array
     {
         $items = $this->items;
         $targetIndex = null;
@@ -158,17 +158,17 @@ final class InMemoryRecordStore implements RecordStore
             return ['changed' => false, 'item' => null];
         }
         $target = $items[$targetIndex];
-        $merged = self::mergeComment($target->comment, $comment);
-        if ($merged === $target->comment) {
+        $merged = self::mergeNote($target->note, $note);
+        if ($merged === $target->note) {
             return ['changed' => false, 'item' => $target];
         }
-        $items[$targetIndex] = $target->withComment($merged, $modifiedAt, $trigger);
+        $items[$targetIndex] = $target->withNote($merged, $modifiedAt, $trigger);
         $this->items = array_values($items);
 
         return ['changed' => true, 'item' => $this->items[$targetIndex]];
     }
 
-    private static function mergeComment(string $existing, string $more): string
+    private static function mergeNote(string $existing, string $more): string
     {
         if ($more === '') {
             return $existing;

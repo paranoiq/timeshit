@@ -138,11 +138,11 @@ final class Resolver
         }
     }
 
-    public static function resolveDate(?string $input): DateTimeImmutable
+    public static function resolveDate(?string $input, string $cmd = 'day'): DateTimeImmutable
     {
         $original = $input === null || $input === '' ? 'today' : $input;
         if (preg_match('/^\d+$/', $original) === 1) {
-            return self::dayOfCurrentMonth((int) $original, $original);
+            return self::dayOfCurrentMonth((int) $original, $original, $cmd);
         }
         $offsets = [
             'today' => 0,
@@ -162,23 +162,23 @@ final class Resolver
             return (new DateTimeImmutable('today'))->modify($offsets[$matches[0]] . ' days');
         }
         if (count($matches) > 1) {
-            throw new RuntimeException("day: ambiguous date '{$original}', could be: " . implode(', ', $matches));
+            throw new RuntimeException("{$cmd}: ambiguous date '{$original}', could be: " . implode(', ', $matches));
         }
         try {
             return new DateTimeImmutable($original);
         } catch (Exception) {
-            throw new RuntimeException("day: invalid date '{$original}'");
+            throw new RuntimeException("{$cmd}: invalid date '{$original}'");
         }
     }
 
-    private static function dayOfCurrentMonth(int $day, string $original): DateTimeImmutable
+    private static function dayOfCurrentMonth(int $day, string $original, string $cmd): DateTimeImmutable
     {
         $today = new DateTimeImmutable('today');
         $year = (int) $today->format('Y');
         $month = (int) $today->format('m');
         $resolved = $today->setDate($year, $month, $day);
         if ((int) $resolved->format('j') !== $day || (int) $resolved->format('n') !== $month) {
-            throw new RuntimeException("day: invalid day-of-month '{$original}' for the current month");
+            throw new RuntimeException("{$cmd}: invalid day-of-month '{$original}' for the current month");
         }
 
         return $resolved;
@@ -193,8 +193,9 @@ final class Resolver
      *
      * @param Closure(): list<WorkItemType> $typesLoader
      * @param list<string> $allowedNames
+     * @param array<string, list<string>> $aliases canonical type name => list of aliases
      */
-    public static function resolveType(string $cmd, ?string $input, ?string $default, Closure $typesLoader, array $allowedNames): string
+    public static function resolveType(string $cmd, ?string $input, ?string $default, Closure $typesLoader, array $allowedNames, array $aliases = []): string
     {
         if ($input === null || $input === '') {
             if ($default === null) {
@@ -204,40 +205,66 @@ final class Resolver
             return $default;
         }
 
-        return self::matchType($cmd, $input, $typesLoader(), $allowedNames);
+        return self::matchType($cmd, $input, $typesLoader(), $allowedNames, $aliases);
     }
 
     /**
+     * Resolves `$input` to a canonical type name. Both canonical names and
+     * their aliases participate in matching: case-insensitive exact match
+     * wins; otherwise case-insensitive prefix match across canonical names
+     * and aliases. Multiple distinct canonicals reachable via prefix → error.
+     * Aliases are surfaced in the "Allowed" error message as `canonical (alias1, alias2)`.
+     *
      * @param list<WorkItemType> $types
      * @param list<string> $allowedNames
+     * @param array<string, list<string>> $aliases canonical type name => list of aliases
      */
-    public static function matchType(string $cmd, string $input, array $types, array $allowedNames): string
+    public static function matchType(string $cmd, string $input, array $types, array $allowedNames, array $aliases = []): string
     {
         $allowed = array_values(array_filter(
             $types,
             static fn(WorkItemType $t): bool => in_array($t->name, $allowedNames, true),
         ));
+        // Build a list of [label, canonical] candidates. Each canonical name
+        // is a candidate, and so is every alias belonging to it.
+        $candidates = [];
+        foreach ($allowed as $type) {
+            $candidates[] = ['label' => $type->name, 'canonical' => $type->name];
+            foreach ($aliases[$type->name] ?? [] as $alias) {
+                $candidates[] = ['label' => $alias, 'canonical' => $type->name];
+            }
+        }
         $needle = mb_strtolower($input);
-        foreach ($allowed as $type) {
-            if (mb_strtolower($type->name) === $needle) {
-                return $type->name;
+        $exact = [];
+        foreach ($candidates as $c) {
+            if (mb_strtolower($c['label']) === $needle) {
+                $exact[$c['canonical']] = true;
             }
         }
-        $matches = [];
-        foreach ($allowed as $type) {
-            if (str_starts_with(mb_strtolower($type->name), $needle)) {
-                $matches[] = $type->name;
+        $exactKeys = array_keys($exact);
+        if (count($exactKeys) === 1) {
+            return $exactKeys[0];
+        }
+        if (count($exactKeys) > 1) {
+            throw new RuntimeException("{$cmd}: ambiguous type '{$input}', could be: " . implode(', ', $exactKeys));
+        }
+        $prefix = [];
+        foreach ($candidates as $c) {
+            if (str_starts_with(mb_strtolower($c['label']), $needle)) {
+                $prefix[$c['canonical']] = true;
             }
         }
-        if (count($matches) === 1) {
-            return $matches[0];
+        $prefixKeys = array_keys($prefix);
+        if (count($prefixKeys) === 1) {
+            return $prefixKeys[0];
         }
-        if (count($matches) > 1) {
-            throw new RuntimeException("{$cmd}: ambiguous type '{$input}', could be: " . implode(', ', $matches));
+        if (count($prefixKeys) > 1) {
+            throw new RuntimeException("{$cmd}: ambiguous type '{$input}', could be: " . implode(', ', $prefixKeys));
         }
         $names = [];
         foreach ($allowed as $t) {
-            $names[] = $t->name;
+            $aliasList = $aliases[$t->name] ?? [];
+            $names[] = $aliasList === [] ? $t->name : "{$t->name} (" . implode(', ', $aliasList) . ')';
         }
         throw new RuntimeException("{$cmd}: unknown type '{$input}'. Allowed: " . implode(', ', $names));
     }

@@ -8,10 +8,16 @@ allowedTypes:
 	- Implementation
 	- Out of office
 	- Test / Review
+typeAliases:
+	Analyses / Design: [Design]
+	'Communication, Meetings, ...': [Meeting]
+	Test / Review: [Review]
 interruptionTypes:
 	- 'Communication, Meetings, ...'
 	- Test / Review
 defaultTrackType: Implementation
 defaultDayType: Out of office
+defaultMeetingType: 'Communication, Meetings, ...'
 defaultMeetingIssue: SW-4002
+defaultOutOfOfficeType: Out of office
 defaultOutOfOfficeIssue: SW-5070

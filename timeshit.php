@@ -21,8 +21,15 @@ $rootDir = __DIR__;
 $io = new StdIo();
 $arg = $argv[1] ?? null;
 
+try {
+    $config = Config::load($rootDir);
+} catch (Throwable $e) {
+    $io->err(Ansi::red("Error: " . $e->getMessage()) . "\n");
+    exit(1);
+}
+
 if ($arg === null || $arg === '' || $arg === '-h' || $arg === '--help') {
-    App::printHelp($io);
+    App::printHelp($io, $config);
     exit(0);
 }
 
@@ -34,13 +41,6 @@ if (!is_file($rootDir . '/config/secrets.neon')) {
         exit(1);
     }
     exit(0);
-}
-
-try {
-    $config = Config::load($rootDir);
-} catch (Throwable $e) {
-    $io->err(Ansi::red("Error: " . $e->getMessage()) . "\n");
-    exit(1);
 }
 
 exit(App::forRoot($rootDir, $config, $io)->run($argv));

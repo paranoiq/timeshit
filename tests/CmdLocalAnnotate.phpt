@@ -83,9 +83,9 @@ Assert::same(1, $app->run(['ts', 'switch', 'doc']));
 Assert::contains('no open tracking entry', $io->getErr());
 
 
-// === comment (append to last non-day record) ===
+// === note (append to last non-day record) ===
 
-// 9. comment lands on the open record when one is open
+// 9. note lands on the open record when one is open
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+10 minutes');
@@ -93,33 +93,33 @@ $io = null;
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
-Assert::same(0, $app->run(['ts', 'comment', 'noticed', 'a', 'thing']));
+Assert::same(0, $app->run(['ts', 'note', 'noticed', 'a', 'thing']));
 $items = $store->load();
-Assert::same('noticed a thing', $items[0]->comment);
+Assert::same('noticed a thing', $items[0]->note);
 Assert::null($items[0]->endedAt);
-Assert::contains('Comment on ABC-1', $io->getErr());
+Assert::contains('Note on ABC-1', $io->getErr());
 Assert::contains('(active)', $io->getErr());
 
-// 10. with no open record, comment lands on the most recent closed
+// 10. with no open record, note lands on the most recent closed
 [$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
 $app->run(['ts', 'end']);
 $io->clear();
-$app->run(['ts', 'comment', 'note', 'after', 'end']);
+$app->run(['ts', 'note', 'note', 'after', 'end']);
 $items = $store->load();
-Assert::same('note after end', $items[0]->comment);
-Assert::contains('Comment on ABC-1', $io->getErr());
+Assert::same('note after end', $items[0]->note);
+Assert::contains('Note on ABC-1', $io->getErr());
 Assert::contains('(last closed)', $io->getErr());
 
-// 11. comment merges into the existing comment with " | "
+// 11. note merges into the existing note with " | "
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
-$app->run(['ts', 'comment', 'first']);
-$app->run(['ts', 'comment', 'second']);
-Assert::same('first | second', $store->load()[0]->comment);
+$app->run(['ts', 'note', 'first']);
+$app->run(['ts', 'note', 'second']);
+Assert::same('first | second', $store->load()[0]->note);
 
-// 12. day records are skipped — when only a day record exists, comment errors
+// 12. day records are skipped — when only a day record exists, note errors
 $dayRecord = new Record(
     id: 1,
     issueId: 'OOO-1',
@@ -130,21 +130,21 @@ $dayRecord = new Record(
     status: 'day',
 );
 [$app, , , $io] = newApp('2026-05-09 10:00', [$dayRecord]);
-Assert::same(1, $app->run(['ts', 'comment', 'should', 'not', 'land']));
-Assert::contains('no record to comment on', $io->getErr());
+Assert::same(1, $app->run(['ts', 'note', 'should', 'not', 'land']));
+Assert::contains('no record to add note to', $io->getErr());
 
-// 13. with both a day record and a regular record, comment lands on the regular one
+// 13. with both a day record and a regular record, note lands on the regular one
 [$app, $store, $clock] = newApp('2026-05-09 10:00', [$dayRecord]);
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+10 minutes');
-$app->run(['ts', 'comment', 'on', 'regular']);
+$app->run(['ts', 'note', 'on', 'regular']);
 $items = $store->load();
-Assert::same('', $items[0]->comment); // day record untouched
-Assert::same('on regular', $items[1]->comment);
+Assert::same('', $items[0]->note); // day record untouched
+Assert::same('on regular', $items[1]->note);
 
 // 14. missing text errors
 [$app, , , $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
-Assert::same(1, $app->run(['ts', 'comment']));
+Assert::same(1, $app->run(['ts', 'note']));
 Assert::contains('missing <text>', $io->getErr());

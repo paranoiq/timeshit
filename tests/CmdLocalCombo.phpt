@@ -91,20 +91,20 @@ Assert::contains(
 );
 
 
-// === combination scenario 4: track → comment → switch (comment placement) ===
+// === combination scenario 4: track → note → switch (note placement) ===
 //
-// Comment lands on the first segment; switching opens a second segment with no
-// comment. Ensures `comment` targets the open record at the time it runs, not
+// Note lands on the first segment; switching opens a second segment with no
+// note. Ensures `note` targets the open record at the time it runs, not
 // future segments.
 [$app, $store, $clock] = newApp('2026-05-09 09:00');
 $app->run(['ts', 'track', 'ABC-1']);
-$app->run(['ts', 'comment', 'design', 'note']);
+$app->run(['ts', 'note', 'design', 'note']);
 $clock->advance('+30 minutes');
 $app->run(['ts', 'switch', 'doc']);
 $items = $store->load();
 Assert::count(2, $items);
-Assert::same('design note', $items[0]->comment);
-Assert::same('', $items[1]->comment);
+Assert::same('design note', $items[0]->note);
+Assert::same('', $items[1]->note);
 
 
 // === combination scenario 5: track → grab → end — interruption flow ===
@@ -136,21 +136,21 @@ Assert::same('2026-05-09 10:15', $items[2]->endedAt);
 Assert::contains('closed at 2026-05-09 10:15 (end)', $items[2]->log);
 
 
-// === combination scenario 6: end → comment lands on the most recent closed ===
+// === combination scenario 6: end → note lands on the most recent closed ===
 //
-// `comment` should attach to the latest non-day record whether open or closed.
-// After `end`, no record is open, so the comment goes to the freshly-closed
+// `note` should attach to the latest non-day record whether open or closed.
+// After `end`, no record is open, so the note goes to the freshly-closed
 // record — useful for recording "wrap-up notes" after the fact.
 [$app, $store, $clock, $io] = newApp('2026-05-09 09:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+1 hour');
 $app->run(['ts', 'end']);
 $io->clear();
-$app->run(['ts', 'comment', 'forgot', 'to', 'note']);
+$app->run(['ts', 'note', 'forgot', 'to', 'note']);
 $items = $store->load();
 Assert::count(1, $items);
-Assert::same('forgot to note', $items[0]->comment);
-Assert::contains('Comment on ABC-1', $io->getErr());
+Assert::same('forgot to note', $items[0]->note);
+Assert::contains('Note on ABC-1', $io->getErr());
 Assert::contains('(last closed)', $io->getErr());
 
 

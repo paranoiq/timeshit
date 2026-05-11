@@ -93,16 +93,17 @@ final class RecordsView
             $startStr = date('H:i', $start);
             $endStr = $item->endedAt !== null ? date('H:i', $end) : Ansi::lgreen('  …  ');
             $time = $startStr . Ansi::lblack('–') . $endStr;
-            $commentText = $item->comment === '' ? '' : ' ' . Ansi::lblack($item->comment);
-            $comment = '  ' . Format::recordId($item->id) . $commentText;
+            $noteText = $item->note === '' ? '' : ' ' . Ansi::lblack($item->note);
+            $note = '  ' . Format::recordId($item->id) . $noteText;
             echo sprintf(
-                "    %s  %s  %s  %s  %s%s\n",
+                "    %s  %s  %s  %s  %s%s  %s\n",
                 Ansi::link($url, sprintf('%-12s', $item->issueId)),
                 Format::spent($minutes),
                 $type,
                 $title,
                 $time,
-                $comment,
+                $note,
+                Format::status($item->status),
             );
         }
     }

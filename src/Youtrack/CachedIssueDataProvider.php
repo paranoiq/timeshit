@@ -2,6 +2,8 @@
 
 namespace Timeshit\Youtrack;
 
+use RuntimeException;
+use Timeshit\Util\Ansi;
 use Timeshit\Util\Io;
 use function count;
 use function sprintf;
@@ -35,7 +37,13 @@ final class CachedIssueDataProvider implements IssueDataProvider
             ];
         }
 
-        return $this->fetchAndCache();
+        try {
+            return $this->fetchAndCache();
+        } catch (RuntimeException $e) {
+            $this->io->err(Ansi::lyellow("Offline ({$e->getMessage()}); using cached data") . "\n");
+
+            return $this->loadFromCacheOrEmpty();
+        }
     }
 
     public function refresh(): void
@@ -83,5 +91,27 @@ final class CachedIssueDataProvider implements IssueDataProvider
             'issues' => $data['issues'],
             'workItems' => $data['workItems'],
         ];
+    }
+
+    /** @return array{user: string, issues: list<Issue>, workItems: list<WorkItem>} */
+    private function loadFromCacheOrEmpty(): array
+    {
+        $user = '';
+        $issues = [];
+        $workItems = [];
+        if ($this->issueCache->exists()) {
+            $issuesData = $this->issueCache->load();
+            $user = $issuesData['user'];
+            $issues = $issuesData['issues'];
+        }
+        if ($this->workItemCache->exists()) {
+            $workItemsData = $this->workItemCache->load();
+            if ($user === '') {
+                $user = $workItemsData['user'];
+            }
+            $workItems = $workItemsData['items'];
+        }
+
+        return ['user' => $user, 'issues' => $issues, 'workItems' => $workItems];
     }
 }

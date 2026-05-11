@@ -58,21 +58,20 @@ interface RecordStore
     public function changeOpenType(string $newType, string $modifiedAt, string $trigger): array;
 
     /**
-     * Closes the latest open entry. When `$appendComment` is non-null and
-     * non-empty it is appended to the existing comment with `' | '`. When
+     * Closes the latest open entry. When `$appendNote` is non-null and
+     * non-empty it is appended to the existing note with `' | '`. When
      * `$pauseClosed` is true, the closed record's status is flipped to
      * `'paused'`.
      *
      * @return array{ended: bool, item: ?Record}
      */
-    public function endOpen(string $endedAt, string $trigger, ?string $appendComment, bool $pauseClosed = false): array;
+    public function endOpen(string $endedAt, string $trigger, ?string $appendNote, bool $pauseClosed = false): array;
 
     /**
-     * Appends `$comment` to the comment of the latest non-day entry, joined
-     * by `' | '`. No-op when the merged result is identical (e.g. empty
-     * append).
+     * Appends `$note` to the note of the latest non-day entry, joined by
+     * `' | '`. No-op when the merged result is identical (e.g. empty append).
      *
      * @return array{changed: bool, item: ?Record}
      */
-    public function commentLast(string $comment, string $modifiedAt, string $trigger): array;
+    public function noteLast(string $note, string $modifiedAt, string $trigger): array;
 }

@@ -35,9 +35,14 @@ function newApp(
         timezone: 'Europe/Prague',
         defaultIssuePrefix: 'SW-',
         allowedTypes: ['Implementation', 'Test / Review', 'Documentation', 'Out of office', 'Analyses / Design', 'Communication, Meetings, ...'],
+        typeAliases: [],
         defaultTrackType: 'Implementation',
         defaultDayType: 'Out of office',
         interruptionTypes: ['Communication, Meetings, ...', 'Test / Review'],
+        defaultMeetingType: 'Communication, Meetings, ...',
+        defaultMeetingIssue: 'SW-4002',
+        defaultOutOfOfficeType: 'Out of office',
+        defaultOutOfOfficeIssue: 'SW-5070',
     );
     $store = new InMemoryRecordStore($records);
     $clock = new FixedClock($now);

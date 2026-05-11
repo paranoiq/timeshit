@@ -114,7 +114,7 @@ Assert::contains('no open tracking entry', $io->getErr());
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+1 hour');
 $app->run(['ts', 'end', 'wrapped', 'up', 'feature']);
-Assert::same('wrapped up feature', $store->load()[0]->comment);
+Assert::same('wrapped up feature', $store->load()[0]->note);
 
 // 13. end on a record that already has a comment joins them with " | "
 $preset = [new Timeshit\Local\Record(
@@ -124,12 +124,12 @@ $preset = [new Timeshit\Local\Record(
     startedAt: '2026-05-09 09:00',
     endedAt: null,
     log: 'created at 2026-05-09 09:00 (track)',
-    comment: 'existing',
+    note: 'existing',
 )];
 [$app, $store, $clock] = newApp('2026-05-09 10:00', $preset);
 $clock->advance('+1 hour');
 $app->run(['ts', 'end', 'and-more']);
-Assert::same('existing | and-more', $store->load()[0]->comment);
+Assert::same('existing | and-more', $store->load()[0]->note);
 
 
 // === pause ===
@@ -146,12 +146,12 @@ Assert::count(2, $items);
 Assert::same('ABC-1', $items[0]->issueId);
 Assert::contains('closed at 2026-05-09 10:30 (pause)', $items[0]->log);
 Assert::same('paused', $items[0]->status);
-Assert::same('', $items[0]->comment);                // pause comment does NOT append here
+Assert::same('', $items[0]->note);                // pause note does NOT append here
 Assert::same('', $items[1]->issueId);                // break record has no issue
 Assert::same('untracked', $items[1]->status);
 Assert::contains('created at 2026-05-09 10:30 (pause)', $items[1]->log);
 Assert::null($items[1]->endedAt);
-Assert::same('lunch', $items[1]->comment);           // pause comment lives on the break record
+Assert::same('lunch', $items[1]->note);           // pause note lives on the break record
 
 // 15. pause with no open record errors
 [$app, , , $io] = newApp();
@@ -190,9 +190,9 @@ $app->run(['ts', 'pause']);
 $clock->advance('+1 hour');
 $app->run(['ts', 'resume', 'after', 'lunch']);
 $items = $store->load();
-Assert::same('', $items[0]->comment);                // closed tracking record
-Assert::same('', $items[1]->comment);                // closed break record
-Assert::same('after lunch', $items[2]->comment);     // new resumed record
+Assert::same('', $items[0]->note);                // closed tracking record
+Assert::same('', $items[1]->note);                // closed break record
+Assert::same('after lunch', $items[2]->note);     // new resumed record
 
 // 18. resume with no records errors
 [$app, , , $io] = newApp();

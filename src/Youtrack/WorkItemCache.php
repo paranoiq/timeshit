@@ -21,6 +21,11 @@ final class WorkItemCache
 
     public function __construct(private readonly string $path) {}
 
+    public function exists(): bool
+    {
+        return file_exists($this->path);
+    }
+
     public function isFresh(): bool
     {
         if (!file_exists($this->path)) {
