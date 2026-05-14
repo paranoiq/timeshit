@@ -44,10 +44,51 @@ final class Format
         return $mins === 0 ? "{$hours}h" : "{$hours}h {$mins}m";
     }
 
+    /** Like `minutes`, but with the number in lwhite and the unit in lblack — for inline action messages. */
+    public static function minutesInline(int $minutes): string
+    {
+        if ($minutes < 60) {
+            return Ansi::lwhite((string) $minutes) . Ansi::lblack('m');
+        }
+        $hours = intdiv($minutes, 60);
+        $mins = $minutes % 60;
+        $hPart = Ansi::lwhite((string) $hours) . Ansi::lblack('h');
+        if ($mins === 0) {
+            return $hPart;
+        }
+
+        return $hPart . ' ' . Ansi::lwhite((string) $mins) . Ansi::lblack('m');
+    }
+
+    public static function durationInline(string $startedAt, string $endedAt): string
+    {
+        $start = new DateTimeImmutable($startedAt);
+        $end = new DateTimeImmutable($endedAt);
+
+        return self::minutesInline(max(0, intdiv($end->getTimestamp() - $start->getTimestamp(), 60)));
+    }
+
+    /** Like `type`, but without truncation or padding — for inline action messages. */
+    public static function typeInline(string $type): string
+    {
+        $normalized = preg_replace('/\s*\/\s*/', '/', $type) ?? $type;
+        $first = explode(',', $normalized)[0];
+
+        return match (true) {
+            $first === 'Implementation' => Ansi::lgreen($first),
+            $first === 'Test/Review'    => Ansi::cyan($first),
+            $first === 'Documentation'  => Ansi::blue($first),
+            $first === 'Communication'  => Ansi::yellow($first),
+            $first === 'Out of office'  => Ansi::magenta($first),
+            default => $first,
+        };
+    }
+
     public static function category(string $category): string
     {
         $shorts = [
             'Admin / Overhead / Support' => 'Admin',
+            'Existing feature enhancement' => 'Enhancement',
             'Generic new feature' => 'Feature',
             'Internal tooling' => 'Tooling',
             'Technical debt' => 'Debt',

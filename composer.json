@@ -8,6 +8,7 @@
         "ext-ffi": "*",
         "ext-intl": "*",
         "ext-json": "*",
+        "ext-posix": "*",
         "ext-mbstring": "*",
         "nette/neon": "^3.4"
     },
@@ -25,7 +26,8 @@
         "sort-packages": true
     },
     "scripts": {
-        "ps": "vendor/bin/phpstan analyse | php ../../../flowbox/flowbox-laravel/tooling/phpstan-tweak.php",
+        "ps": "vendor/bin/phpstan analyse",
+        "psf": "vendor/bin/phpstan analyse | php ../../../flowbox/flowbox-laravel/tooling/phpstan-tweak.php",
         "t": "vendor/bin/tester tests",
         "tc": "vendor/bin/tester tests --coverage coverage.html --coverage-src src"
     }

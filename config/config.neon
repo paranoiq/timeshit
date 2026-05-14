@@ -20,5 +20,12 @@ defaultTrackType: Implementation
 defaultDayType: Out of office
 defaultMeetingType: 'Communication, Meetings, ...'
 defaultMeetingIssue: SW-4002
+defaultMailType: 'Communication, Meetings, ...'
+defaultMailIssue: SW-4002
+defaultReviewType: Test / Review
+defaultTestType: Test / Review
+defaultImplementType: Implementation
+defaultAnalyseType: Analyses / Design
+defaultDesignType: Analyses / Design
 defaultOutOfOfficeType: Out of office
 defaultOutOfOfficeIssue: SW-5070

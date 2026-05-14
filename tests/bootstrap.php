@@ -42,6 +42,13 @@ function newApp(
         interruptionTypes: ['Communication, Meetings, ...', 'Test / Review'],
         defaultMeetingType: 'Communication, Meetings, ...',
         defaultMeetingIssue: 'SW-4002',
+        defaultMailType: 'Communication, Meetings, ...',
+        defaultMailIssue: 'SW-4002',
+        defaultReviewType: 'Test / Review',
+        defaultTestType: 'Test / Review',
+        defaultImplementType: 'Implementation',
+        defaultAnalyseType: 'Analyses / Design',
+        defaultDesignType: 'Analyses / Design',
         defaultOutOfOfficeType: 'Out of office',
         defaultOutOfOfficeIssue: 'SW-5070',
         editor: 'true',
@@ -64,6 +71,8 @@ function newApp(
         io: $io,
         configurator: $configurator,
         pusher: $pusher,
+        serverPidFile: __DIR__ . '/_fixtures/server.pid',
+        serverScript: __DIR__ . '/_fixtures/server.php',
     );
 
     return [$app, $store, $clock, $io, $pusher];

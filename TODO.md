@@ -2,16 +2,10 @@
 todo:
 -----
 
-- spawn a http server on 1885 to listen to browser plugin/favelet
-- server will periodically save time and auto-end current record if computer was off for some time
+- spawn a http server on 1885 to listen to browser plugin/favelet/
 - show all week-days in work list. red if empty
 - status will show all paused records
-- delete command
-- sync command
-- review/test command
-- analyse/design command
 - nth: split command to split the same time between two issues
-- reverse order in lists, so last time in last in the day
 
 
 Looking at the current command set, a few common dev scenarios stand out as not (yet) covered:

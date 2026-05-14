@@ -73,10 +73,10 @@ Subcommands (read `App.php` for argument shapes, error cases, and log-entry word
 - **Read-only:** `status`, `issues`, `remote`, `local`, `all`, `types`, `refresh`
 - **Sync:** `push [<date>]` — sum closed records by (day, issue, type) up to `<date>` (default: `yesterday`, accepts `today` to include today) and POST a work item per group; on success the records move to `data/archive.neon` with the assigned `workItemId` and `status='synced'`; on failure they stay in `data/records.neon` with `status='failed'` and a `sync failed (…)` log entry. Open records and `untracked` / already-`synced` records are skipped. `failed` records are retried on the next `push`.
 - **Track:** `track <issue> [<type>]`, `checkout <branch> <repo>` (git hook), `interrupt <issue> [<type>]`
-- **Annotate / mutate the open record:** `type <type>`, `switch <type>`, `note <text>`
+- **Annotate / mutate the open record:** `type [#<id>] <type>`, `switch <type>`, `note [#<id>] <text>`
 - **Pause / resume / close:** `pause [<note>]`, `resume [<note>]`, `end [<note>]`, `done [<note>]`
 - **Backfill:** `day <issue> [<date>] [<type>]`, `skip <span>`, `grab <issue> <span> [<type>]`, `put <issue> <span> [<type>]`
-- **Edit timestamps (with [y/N] confirm):** `at <time>`, `before <span>`, `after <span>`
+- **Edit timestamps (with [y/N] confirm):** `at [#<id>] <time>`, `before [#<id>] <span>`, `after [#<id>] <span>`
 - **Free-form edit:** `edit <id>` — opens the record (by id) in `$config->editor` as NEON, validates and re-saves
 - **Hidden:** `configure` (also auto-triggered when `config/secrets.neon` is missing)
 
@@ -99,6 +99,10 @@ Every command that takes a `<type>` argument (`track`, `day`, `type`, `switch`, 
 ### Adjacency adjustment
 
 When `at` / `before` shifts the open record's `startedAt` and the immediately-prior record's `endedAt` matched the **old** `startedAt` (and the prior record is not a `day` record), the prior's `endedAt` shifts to match the new value too — so adjacent segments stay adjacent. Both records appear in the Old/New diff. Each shift appends an `edited <field> from <old> to <new> at <now> (<cmd>)` entry to the affected record's `log`.
+
+### Edit-by-id targeting
+
+`at`, `before`, `after`, `type`, `note` accept an optional leading `#<id>` token that picks the record to edit instead of using the default "last non-day record" / "open record". `Resolver::peelRecordId` parses the token; the rest of the argv (joined by spaces, like `note`) is the command's normal argument. `day`-status records are refused. The default-when-missing behavior is unchanged: `type` / `note` go through `RecordStore::changeOpenType` / `noteLast`; `at` / `before` / `after` scan backwards for the last non-day record.
 
 ## Local tracking
 

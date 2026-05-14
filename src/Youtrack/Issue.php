@@ -21,6 +21,7 @@ final class Issue
         public readonly string $assignee,
         public readonly int $spent,
         public readonly array $roles,
+        public readonly string $description = '',
     ) {}
 
     /** @param array<int|string, mixed> $data */
@@ -36,6 +37,7 @@ final class Issue
             assignee: self::str($data, 'assignee'),
             spent: self::int($data, 'spent'),
             roles: self::strList($data, 'roles'),
+            description: self::strOpt($data, 'description'),
         );
     }
 
@@ -80,5 +82,13 @@ final class Issue
         }
 
         return $value;
+    }
+
+    /** @param array<int|string, mixed> $data */
+    private static function strOpt(array $data, string $key): string
+    {
+        $value = $data[$key] ?? null;
+
+        return is_string($value) ? $value : '';
     }
 }

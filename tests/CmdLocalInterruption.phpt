@@ -354,9 +354,9 @@ Assert::same('Implementation', $items[2]->type);
 Assert::contains('created at 2026-05-09 10:45 (done)', $items[2]->log);
 Assert::null($items[2]->endedAt);
 
-// 29. `m` prefix resolves uniquely to meeting
+// 29. `me` prefix resolves uniquely to meeting (bare `m` is ambiguous with `mail`)
 [$app, $store] = newApp('2026-05-09 10:00');
-Assert::same(0, $app->run(['ts', 'm']));
+Assert::same(0, $app->run(['ts', 'me']));
 $items = $store->load();
 Assert::same('SW-4002', $items[0]->issueId);
 

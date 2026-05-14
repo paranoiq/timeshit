@@ -6,6 +6,7 @@ use RuntimeException;
 use Timeshit\Util\Ansi;
 use Timeshit\Util\Io;
 use function count;
+use function in_array;
 use function sprintf;
 
 final class CachedIssueDataProvider implements IssueDataProvider
@@ -51,6 +52,41 @@ final class CachedIssueDataProvider implements IssueDataProvider
         $this->fetchAndCache();
     }
 
+    public function ensureIssue(string $issueId): void
+    {
+        $issues = [];
+        $extraIds = [];
+        $user = '';
+        if ($this->issueCache->exists()) {
+            $data = $this->issueCache->load();
+            $issues = $data['issues'];
+            $extraIds = $data['extraIds'];
+            $user = $data['user'];
+        }
+        foreach ($issues as $existing) {
+            if ($existing->id === $issueId) {
+                return;
+            }
+        }
+        $extraIds = self::addUnique($extraIds, $issueId);
+        try {
+            $fetched = $this->client->fetchIssue($issueId);
+        } catch (RuntimeException $e) {
+            $this->io->err(Ansi::lyellow("Offline ({$e->getMessage()}); '{$issueId}' will be fetched on next refresh") . "\n");
+            $this->issueCache->save($user, $issues, $extraIds);
+
+            return;
+        }
+        if ($fetched === null) {
+            $this->io->err(Ansi::lyellow("YouTrack reports '{$issueId}' does not exist") . "\n");
+            $this->issueCache->save($user, $issues, $extraIds);
+
+            return;
+        }
+        $issues[] = $fetched;
+        $this->issueCache->save($user, $issues, $extraIds);
+    }
+
     /** @return array<string, string> */
     public function titles(): array
     {
@@ -77,18 +113,42 @@ final class CachedIssueDataProvider implements IssueDataProvider
             $me['login'],
         ));
 
+        $previousExtraIds = $this->issueCache->exists() ? $this->issueCache->load()['extraIds'] : [];
+
         $data = $this->client->fetchMine();
-        $this->issueCache->save($me['login'], $data['issues']);
+        $issues = $data['issues'];
+
+        $remainingExtraIds = [];
+        foreach ($previousExtraIds as $id) {
+            if (self::containsId($issues, $id)) {
+                continue;
+            }
+            try {
+                $fetched = $this->client->fetchIssue($id);
+            } catch (RuntimeException $e) {
+                $this->io->err(Ansi::lyellow("Failed to refresh extra issue '{$id}': {$e->getMessage()}") . "\n");
+                $remainingExtraIds[] = $id;
+                continue;
+            }
+            if ($fetched === null) {
+                $this->io->err(Ansi::lyellow("Extra issue '{$id}' no longer exists; removing from list") . "\n");
+                continue;
+            }
+            $issues[] = $fetched;
+            $remainingExtraIds[] = $id;
+        }
+
+        $this->issueCache->save($me['login'], $issues, $remainingExtraIds);
         $this->workItemCache->save($me['login'], $data['workItems']);
         $this->io->err(sprintf(
             "Cached %d issues and %d work items\n",
-            count($data['issues']),
+            count($issues),
             count($data['workItems']),
         ));
 
         return [
             'user' => $me['login'],
-            'issues' => $data['issues'],
+            'issues' => $issues,
             'workItems' => $data['workItems'],
         ];
     }
@@ -113,5 +173,33 @@ final class CachedIssueDataProvider implements IssueDataProvider
         }
 
         return ['user' => $user, 'issues' => $issues, 'workItems' => $workItems];
+    }
+
+    /**
+     * @param list<Issue> $issues
+     */
+    private static function containsId(array $issues, string $id): bool
+    {
+        foreach ($issues as $issue) {
+            if ($issue->id === $id) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<string> $ids
+     * @return list<string>
+     */
+    private static function addUnique(array $ids, string $id): array
+    {
+        if (in_array($id, $ids, true)) {
+            return $ids;
+        }
+        $ids[] = $id;
+
+        return $ids;
     }
 }

@@ -43,6 +43,26 @@ final class Resolver
     }
 
     /**
+     * Peels off an optional leading `#<id>` token (literal `#` plus one or
+     * more digits) from `$arg` and returns `[(int) id | null, remaining-string | null]`.
+     * The id token must be separated from the rest by whitespace.
+     *
+     * @return array{0: ?int, 1: ?string}
+     */
+    public static function peelRecordId(string $cmd, ?string $arg): array
+    {
+        if ($arg === null || $arg === '' || $arg[0] !== '#') {
+            return [null, $arg];
+        }
+        if (preg_match('/^#(\d+)(?:\s+(.*))?$/', $arg, $m) !== 1) {
+            throw new RuntimeException("{$cmd}: invalid record id token at start of '{$arg}' (expected #<digits>)");
+        }
+        $rest = $m[2] ?? '';
+
+        return [(int) $m[1], $rest === '' ? null : $rest];
+    }
+
+    /**
      * Resolves a user-provided `<issue>` argument. Pure digits are expanded
      * with `$defaultPrefix` (e.g. `123` → `SW-123`). Standard `ABC-123` form
      * is uppercased. Anything else is returned verbatim — the format is not
@@ -70,10 +90,19 @@ final class Resolver
         return preg_match('/^[A-Za-z]+-\d+$/', $id) === 1;
     }
 
-    public static function extractIssueId(string $branch): string
+    /**
+     * Pulls the YouTrack-style issue id out of a git branch name. Matches
+     * `ABC-123…` at the start of the branch. If the branch starts with bare
+     * digits and `$defaultPrefix` is non-empty, the prefix is prepended
+     * (`1234-feature` → `SW-1234`).
+     */
+    public static function extractIssueId(string $branch, string $defaultPrefix = ''): string
     {
         if (preg_match('/^([A-Za-z]{1,3}-\d+)\b/', $branch, $m) === 1) {
             return strtoupper($m[1]);
+        }
+        if ($defaultPrefix !== '' && preg_match('/^(\d+)\b/', $branch, $m) === 1) {
+            return strtoupper($defaultPrefix . $m[1]);
         }
 
         return $branch;
@@ -138,11 +167,12 @@ final class Resolver
         }
     }
 
-    public static function resolveDate(?string $input, string $cmd = 'day'): DateTimeImmutable
+    public static function resolveDate(?string $input, string $cmd = 'day', ?DateTimeImmutable $today = null): DateTimeImmutable
     {
+        $today ??= new DateTimeImmutable('today');
         $original = $input === null || $input === '' ? 'today' : $input;
         if (preg_match('/^\d+$/', $original) === 1) {
-            return self::dayOfCurrentMonth((int) $original, $original, $cmd);
+            return self::dayOfCurrentMonth((int) $original, $original, $cmd, $today);
         }
         $offsets = [
             'today' => 0,
@@ -159,7 +189,7 @@ final class Resolver
             }
         }
         if (count($matches) === 1) {
-            return (new DateTimeImmutable('today'))->modify($offsets[$matches[0]] . ' days');
+            return $today->modify($offsets[$matches[0]] . ' days');
         }
         if (count($matches) > 1) {
             throw new RuntimeException("{$cmd}: ambiguous date '{$original}', could be: " . implode(', ', $matches));
@@ -171,9 +201,8 @@ final class Resolver
         }
     }
 
-    private static function dayOfCurrentMonth(int $day, string $original, string $cmd): DateTimeImmutable
+    private static function dayOfCurrentMonth(int $day, string $original, string $cmd, DateTimeImmutable $today): DateTimeImmutable
     {
-        $today = new DateTimeImmutable('today');
         $year = (int) $today->format('Y');
         $month = (int) $today->format('m');
         $resolved = $today->setDate($year, $month, $day);
@@ -280,6 +309,12 @@ final class Resolver
     public static function matchCommand(string $input, array $commands): ?string
     {
         $needle = mb_strtolower($input);
+
+        // not included in shortenable commands
+        if ($needle === 'types') {
+            return $needle;
+        }
+
         foreach ($commands as $cmd) {
             if (mb_strtolower($cmd) === $needle) {
                 return $cmd;

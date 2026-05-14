@@ -97,7 +97,8 @@ Assert::same(0, $app->run(['ts', 'note', 'noticed', 'a', 'thing']));
 $items = $store->load();
 Assert::same('noticed a thing', $items[0]->note);
 Assert::null($items[0]->endedAt);
-Assert::contains('Note on ABC-1', $io->getErr());
+Assert::contains('Note on', $io->getErr());
+Assert::contains('ABC-1', $io->getErr());
 Assert::contains('(active)', $io->getErr());
 
 // 10. with no open record, note lands on the most recent closed
@@ -109,7 +110,8 @@ $io->clear();
 $app->run(['ts', 'note', 'note', 'after', 'end']);
 $items = $store->load();
 Assert::same('note after end', $items[0]->note);
-Assert::contains('Note on ABC-1', $io->getErr());
+Assert::contains('Note on', $io->getErr());
+Assert::contains('ABC-1', $io->getErr());
 Assert::contains('(last closed)', $io->getErr());
 
 // 11. note merges into the existing note with " | "
@@ -148,3 +150,66 @@ $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
 Assert::same(1, $app->run(['ts', 'note']));
 Assert::contains('missing <text>', $io->getErr());
+
+
+// === type / note with explicit #id targeting ===
+
+// 15. type #id targets a closed record (not just the open one)
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'end']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'track', 'ABC-2']);
+Assert::same(0, $app->run(['ts', 'type', '#1', 'doc']));
+$items = $store->load();
+Assert::same('Documentation', $items[0]->type);
+Assert::same('Implementation', $items[1]->type);
+Assert::contains('updated type Documentation at 2026-05-09 11:00 (type)', $items[0]->log);
+
+// 16. type #id with unknown id errors
+[$app, , , $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$io->clear();
+Assert::same(1, $app->run(['ts', 'type', '#99', 'doc']));
+Assert::contains('record #99 not found', $io->getErr());
+
+// 17. type #id refuses day records
+$dayRecord = new Record(
+    id: 1,
+    issueId: 'OOO-1',
+    type: 'Out of office',
+    startedAt: '2026-05-08 09:00',
+    endedAt: '2026-05-08 17:00',
+    log: 'created at 2026-05-08 09:00 (day) | closed at 2026-05-08 17:00 (day)',
+    status: 'day',
+);
+[$app, , , $io] = newApp('2026-05-09 10:00', [$dayRecord]);
+Assert::same(1, $app->run(['ts', 'type', '#1', 'doc']));
+Assert::contains('refusing to edit day record #1', $io->getErr());
+
+// 18. note #id appends to a closed record
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'end']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'track', 'ABC-2']);
+Assert::same(0, $app->run(['ts', 'note', '#1', 'late', 'thought']));
+$items = $store->load();
+Assert::same('late thought', $items[0]->note);
+Assert::same('', $items[1]->note);
+
+// 19. note #id appends with " | " to existing notes
+[$app, $store] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$app->run(['ts', 'note', 'first']);
+$app->run(['ts', 'note', '#1', 'second']);
+Assert::same('first | second', $store->load()[0]->note);
+
+// 20. note #id with unknown id errors
+[$app, , , $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$io->clear();
+Assert::same(1, $app->run(['ts', 'note', '#99', 'nope']));
+Assert::contains('record #99 not found', $io->getErr());

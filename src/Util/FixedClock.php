@@ -2,6 +2,7 @@
 
 namespace Timeshit\Util;
 
+use DateMalformedStringException;
 use DateTimeImmutable;
 use RuntimeException;
 
@@ -22,11 +23,11 @@ final class FixedClock implements Clock
     /** Advances the clock by a `DateTimeImmutable::modify` expression (e.g. `+30m`, `+1h`, `-15m`). */
     public function advance(string $modifier): void
     {
-        $modified = $this->now->modify($modifier);
-        if ($modified === false) {
+        try {
+            $this->now = $this->now->modify($modifier);
+        } catch (DateMalformedStringException) {
             throw new RuntimeException("FixedClock: invalid modifier '{$modifier}'");
         }
-        $this->now = $modified;
     }
 
     public function now(): DateTimeImmutable

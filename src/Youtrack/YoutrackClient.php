@@ -34,6 +34,10 @@ use const CURLOPT_TIMEOUT;
 
 final class YoutrackClient
 {
+    private const ISSUE_FIELDS = 'idReadable,summary,description,'
+        . 'project(shortName,name),'
+        . 'customFields(name,value(name,login,fullName,minutes,presentation))';
+
     private readonly string $baseUrl;
     private readonly string $token;
 
@@ -57,6 +61,25 @@ final class YoutrackClient
     }
 
     /**
+     * Fetches a single issue by its readable id (e.g. `SW-1234`). Returns
+     * `null` when YouTrack reports the issue does not exist (HTTP 404).
+     * Other errors (network, auth, 5xx, …) propagate as `RuntimeException`.
+     */
+    public function fetchIssue(string $id): ?Issue
+    {
+        try {
+            $raw = $this->get('/api/issues/' . rawurlencode($id), ['fields' => self::ISSUE_FIELDS]);
+        } catch (RuntimeException $e) {
+            if (strpos($e->getMessage(), 'HTTP 404') !== false) {
+                return null;
+            }
+            throw $e;
+        }
+
+        return self::parseIssue($raw, []);
+    }
+
+    /**
      * Fetches all issues the current user is involved in (one query per role
      * so we know *why* each was downloaded), plus all work items they authored.
      * Each issue carries a `roles` list naming which queries matched it.
@@ -65,9 +88,7 @@ final class YoutrackClient
      */
     public function fetchMine(int $top = 1000): array
     {
-        $issueFields = 'idReadable,summary,'
-            . 'project(shortName,name),'
-            . 'customFields(name,value(name,login,fullName,minutes,presentation))';
+        $issueFields = self::ISSUE_FIELDS;
 
         $roleQueries = [
             'assignee' => 'assignee: me',
@@ -305,6 +326,7 @@ final class YoutrackClient
             assignee: self::cfUser($issue, 'Assignee') ?? '-',
             spent: self::cfMinutes($issue, 'Spent time') ?? 0,
             roles: $roles,
+            description: self::asString($issue['description'] ?? null) ?? '',
         );
     }
 

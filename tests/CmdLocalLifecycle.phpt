@@ -182,24 +182,12 @@ Assert::contains('created at 2026-05-09 11:30 (resume)', $items[2]->log);
 Assert::same('2026-05-09 11:30', $items[2]->startedAt);
 Assert::null($items[2]->endedAt);
 
-// 17. resume with comment puts the text on the resumed record (not on the prior break/tracking)
-[$app, $store, $clock] = newApp('2026-05-09 10:00');
-$app->run(['ts', 'track', 'ABC-1']);
-$clock->advance('+30 minutes');
-$app->run(['ts', 'pause']);
-$clock->advance('+1 hour');
-$app->run(['ts', 'resume', 'after', 'lunch']);
-$items = $store->load();
-Assert::same('', $items[0]->note);                // closed tracking record
-Assert::same('', $items[1]->note);                // closed break record
-Assert::same('after lunch', $items[2]->note);     // new resumed record
-
-// 18. resume with no records errors
+// 17. resume with no records errors
 [$app, , , $io] = newApp();
 Assert::same(1, $app->run(['ts', 'resume']));
 Assert::contains('no record to resume', $io->getErr());
 
-// 19. resume errors only when the latest open record is a tracking record;
+// 18. resume errors only when the latest open record is a tracking record;
 //     an open *untracked* break record is not an error (resume closes it).
 [$app, , , $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);

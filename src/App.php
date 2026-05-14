@@ -23,6 +23,7 @@ use Timeshit\View\WorkView;
 use Timeshit\Youtrack\CachedIssueDataProvider;
 use Timeshit\Youtrack\CachedTypeProvider;
 use Timeshit\Youtrack\HttpWorkItemPusher;
+use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\IssueCache;
 use Timeshit\Youtrack\IssueDataProvider;
 use Timeshit\Youtrack\TypeProvider;
@@ -31,17 +32,25 @@ use Timeshit\Youtrack\WorkItemPusher;
 use Timeshit\Youtrack\WorkItemType;
 use Timeshit\Youtrack\WorkItemTypeCache;
 use Timeshit\Youtrack\YoutrackClient;
+use function array_filter;
 use function array_values;
 use function count;
 use function ctype_digit;
 use function date_default_timezone_set;
 use function escapeshellarg;
+use function exec;
+use function fclose;
 use function file_get_contents;
 use function file_put_contents;
+use function fread;
+use function fwrite;
+use function proc_close;
+use function proc_open;
 use function implode;
 use function in_array;
 use function intdiv;
 use function is_array;
+use function posix_kill;
 use function is_int;
 use function ksort;
 use function max;
@@ -50,12 +59,13 @@ use function mb_strtolower;
 use function mb_substr;
 use function rtrim;
 use function sprintf;
+use function str_contains;
 use function str_repeat;
+use function stream_socket_client;
 use function str_starts_with;
 use function strtolower;
 use function substr;
 use function sys_get_temp_dir;
-use function system;
 use function trim;
 use function uniqid;
 use function unlink;
@@ -69,6 +79,8 @@ final class App
     private const WORK_ITEM_TYPES_FILE = '/data/work-item-types.neon';
     private const RECORDS_FILE = '/data/records.neon';
     private const ARCHIVE_FILE = '/data/archive.neon';
+    private const SERVER_PID_FILE = '/data/server.pid';
+    private const SERVER_SCRIPT = '/server.php';
 
     public function __construct(
         private readonly Config $config,
@@ -79,6 +91,8 @@ final class App
         private readonly Io $io,
         private readonly Configurator $configurator,
         private readonly WorkItemPusher $pusher,
+        private readonly string $serverPidFile,
+        private readonly string $serverScript,
     ) {}
 
     /** Wires the file/network-backed implementations from a project root directory. */
@@ -107,16 +121,18 @@ final class App
             io: $io,
             configurator: new Configurator($rootDir, $io),
             pusher: new HttpWorkItemPusher($client),
+            serverPidFile: $rootDir . self::SERVER_PID_FILE,
+            serverScript: $rootDir . self::SERVER_SCRIPT,
         );
     }
 
     private const COMMAND_NAMES = [
         'status', 'issues', 'remote', 'local', 'all', //'types',
-        'track', 'interrupt', 'meeting', 'day', 'vacation', 'type', 'switch',
-        'pause', 'resume', 'continue', 'skip', 'grab', 'put', 'end', 'done', 'note', 'edit', 'refresh',
-        'at', 'before', 'after',
-        'push',
-        'checkout',
+        'track', 'interrupt', 'meeting', 'mail', 'review', 'test', 'implement', 'analyse', 'design', 'day', 'vacation', 'type', 'switch',
+        'pause', 'resume', 'continue', 'skip', 'grab', 'put', 'end', 'done',
+        'at', 'before', 'after', 'note', 'edit', 'delete',
+        'refresh', 'push',
+        'checkout', 'server',
         //'configure',
         'help',
     ];
@@ -143,26 +159,36 @@ final class App
             $this->unknownCommand($input);
         }
 
+        if ($resolved !== 'server') {
+            $this->maybeAutoStartServer();
+        }
+
         try {
             match ($resolved) {
                 'help' => self::printHelp($this->io, $this->config),
-                'issues' => $this->cmdIssues(),
+                'issues' => $this->cmdIssues(Resolver::restArgs($argv)),
                 'remote' => $this->cmdRemote(),
-                'local' => $this->cmdLocal(),
-                'all' => $this->cmdAll(),
+                'local' => $this->cmdLocal($argv[2] ?? null),
+                'all' => $this->cmdAll($argv[2] ?? null),
                 'status' => $this->cmdStatus(),
                 'refresh' => $this->cmdRefresh(),
                 'track' => $this->cmdTrack($argv[2] ?? null, $argv[3] ?? null),
                 'interrupt' => $this->cmdInterrupt($argv[2] ?? null, $argv[3] ?? null),
                 'meeting' => $this->cmdMeeting(Resolver::restArgs($argv)),
+                'mail' => $this->cmdMail(Resolver::restArgs($argv)),
+                'review' => $this->cmdReview($argv[2] ?? null),
+                'test' => $this->cmdTest($argv[2] ?? null),
+                'implement' => $this->cmdImplement($argv[2] ?? null),
+                'analyse' => $this->cmdAnalyse($argv[2] ?? null),
+                'design' => $this->cmdDesign($argv[2] ?? null),
                 'day' => $this->cmdDay($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
                 'vacation' => $this->cmdVacation($argv[2] ?? null, $argv[3] ?? null),
                 'checkout' => $this->cmdCheckout($argv[2] ?? null, $argv[3] ?? null),
-                'type' => $this->cmdType($argv[2] ?? null),
+                'type' => $this->cmdType(Resolver::restArgs($argv)),
                 'types' => $this->cmdTypes(),
                 'switch' => $this->cmdSwitch($argv[2] ?? null),
                 'pause' => $this->cmdPause(Resolver::restArgs($argv)),
-                'resume', 'continue' => $this->cmdResume(Resolver::restArgs($argv)),
+                'resume', 'continue' => $this->cmdResume(),
                 'skip' => $this->cmdSkip($argv[2] ?? null),
                 'grab' => $this->cmdGrab($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
                 'put' => $this->cmdPut($argv[2] ?? null, $argv[3] ?? null, $argv[4] ?? null),
@@ -170,10 +196,12 @@ final class App
                 'done' => $this->cmdDone(Resolver::restArgs($argv)),
                 'note' => $this->cmdNote(Resolver::restArgs($argv)),
                 'edit' => $this->cmdEdit($argv[2] ?? null),
-                'at' => $this->cmdAt($argv[2] ?? null),
-                'before' => $this->cmdBefore($argv[2] ?? null),
-                'after' => $this->cmdAfter($argv[2] ?? null),
+                'delete' => $this->cmdDelete($argv[2] ?? null),
+                'at' => $this->cmdAt(Resolver::restArgs($argv)),
+                'before' => $this->cmdBefore(Resolver::restArgs($argv)),
+                'after' => $this->cmdAfter(Resolver::restArgs($argv)),
                 'push' => $this->cmdPush($argv[2] ?? null),
+                'server' => $this->cmdServer($argv[2] ?? null),
                 'configure' => $this->configurator->run(),
                 default => throw new RuntimeException("dispatch: no handler for resolved command '{$resolved}'"),
             };
@@ -258,42 +286,54 @@ final class App
 
             return Ansi::lgreen(Ansi::underline($head) . $tail);
         };
-        $req = static fn(string $name): string => Ansi::yellow("<{$name}>");
-        $opt = static fn(string $name): string => Ansi::lblack("[") . Ansi::yellow("<{$name}>") . Ansi::lblack("]");
+        $req = static function(string $name): string {
+            return $name === 'note' ? Ansi::lblue("<{$name}>"): Ansi::lyellow("<{$name}>");
+        };
+        $opt = static function(string $name): string {
+            return Ansi::lblack("[") . ($name === 'note' ? Ansi::lblue("<{$name}>") : Ansi::lyellow("<{$name}>")) . Ansi::lblack("]");
+        };
+        $flag = static fn(string $name): string => Ansi::lblack("[") . Ansi::lyellow($name) . Ansi::lblack("]");
         $val = static fn(string $name): string => Ansi::lgreen($name);
         $app = static fn(string $name): string => Ansi::lblue($name);
 
         $groups = [
             'Info' => [
                 [$cmd('status'),   '', 'Show the currently active record (if any) and the last closed one'],
-                [$cmd('issues'),   '', 'List ' . $app('YouTrack') . ' issues you are involved in (cached for 24h)'],
+                [$cmd('issues'),   $opt('search'), 'List ' . $app('YouTrack') . ' issues you are involved in (cached for 24h)'],
                 [$cmd('remote'),   '', 'List time entries already on ' . $app('YouTrack') . ' (cached for 24h)'],
-                [$cmd('local'),    '', 'List locally tracked records not yet synced to ' . $app('YouTrack')],
-                [$cmd('all'),      '', 'List time entries from both ' . $cmd('remote') . ' and ' . $cmd('local') . ' (' . Ansi::lgreen('●') . ' synced / ' . Ansi::lyellow('○') . ' local / ' . Ansi::red('✗') . ' failed)'],
+                [$cmd('local'),    $flag('details'), 'List locally tracked records grouped by day/issue/type (' . $val('details') . ': one row per record)'],
+                [$cmd('all'),      $flag('details'), 'List time entries from both ' . $cmd('remote') . ' and ' . $cmd('local')],
                 //[$cmd('types'),    '', 'List the ' . $app('YouTrack') . ' work-item types (cached for 24h)'],
             ],
             'Actions' => [
                 [$cmd('track'),    $req('issue') . ' ' . $opt('type'), 'Start tracking of ' . $req('issue')],
+                [$cmd('analyse'),  $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultAnalyseType') . ' from config'],
+                [$cmd('design'),   $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultDesignType') . ' from config'],
+                [$cmd('implement'),$req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultImplementType') . ' from config'],
+                [$cmd('review'),   $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultReviewType') . ' from config'],
+                [$cmd('test'),     $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultTestType') . ' from config'],
                 [$cmd('interrupt'),$req('issue') . ' ' . $opt('type'), 'Like ' . $cmd('track') . ', but mark the currently open record as paused (auto-resumed by ' . $cmd('done') . ')'],
                 [$cmd('meeting'),  $opt('note'), 'Like ' . $cmd('interrupt') . ', but uses ' . Ansi::lgreen('defaultMeetingIssue') . ' / ' . Ansi::lgreen('defaultMeetingType') . ' from config'],
+                [$cmd('mail'),     $opt('note'), 'Like ' . $cmd('interrupt') . ', but uses ' . Ansi::lgreen('defaultMailIssue') . ' / ' . Ansi::lgreen('defaultMailType') . ' from config'],
                 [$cmd('pause'),    $opt('note'), 'Pause the current entry'],
-                [$cmd('resume'),   $opt('note'), 'Resume tracking from the most recent entry (alias: ' . $cmd('continue') . ')'],
+                [$cmd('resume'),   '', 'Resume tracking from the most recent entry (alias: ' . $cmd('continue') . ')'],
                 [$cmd('done'),     $opt('note'), 'End the current entry and auto-resume the most recently interrupted one'],
                 [$cmd('end'),      $opt('note'), 'End the current entry'],
                 [$cmd('switch'),   $req('type'), 'End current entry and start same one with different ' . $req('type')],
                 [$cmd('skip'),     $req('span'), 'End the open record ' . $req('span') . ' ago and immediately open a new one'],
-                [$cmd('grab'),     $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Grab a ' . $req('span') . '-long time from the open record and fill it with ' . $req('issue')],
-                [$cmd('put'),      $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Add a closed ' . $req('span') . '-long record for ' . $req('issue') . ' starting at midnight (for untracked time)'],
+                [$cmd('grab'),     $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Grab a ' . $req('span') . '-long time from the open entry and fill it with ' . $req('issue')],
+                [$cmd('put'),      $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Add a ' . $req('span') . '-long entry for ' . $req('issue') . ' without tracking'],
                 [$cmd('day'),      $req('issue') . ' ' . $opt('date') . ' ' . $opt('type'), 'Log a full 8h day for ' . $req('issue') . ' on ' . $req('date') . ', default type: ' . Ansi::lgreen($config->defaultDayType)],
                 [$cmd('vacation'), $req('date') . ' ' . $req('date'), 'Log a full 8h day on every working day between the two ' . $req('date') . 's (inclusive)'],
             ],
             'Edits' => [
-                [$cmd('at'),       $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record'],
-                [$cmd('before'),   $req('span'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('span')],
-                [$cmd('after'),    $req('span'), 'Move the end of the last closed non-day record later by ' . $req('span')],
-                [$cmd('type'),     $req('type'), 'Change the type of the current entry'],
-                [$cmd('note'),     $req('note'), 'Add a note to the current entry'],
+                [$cmd('at'),       $opt('id') . ' ' . $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record (or ' . $req('id') . ')'],
+                [$cmd('before'),   $opt('id') . ' ' . $req('span'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('span') . ' (or ' . $req('id') . ')'],
+                [$cmd('after'),    $opt('id') . ' ' . $req('span'), 'Move the end of the last closed non-day record later by ' . $req('span') . ' (or ' . $req('id') . ')'],
+                [$cmd('type'),     $opt('id') . ' ' . $req('type'), 'Change the type of the current entry (or ' . $req('id') . ')'],
+                [$cmd('note'),     $opt('id') . ' ' . $req('note'), 'Add a note to the current entry (or ' . $req('id') . ')'],
                 [$cmd('edit'),     $req('id'),   'Open record ' . $req('id') . ' in the configured ' . Ansi::lgreen('editor') . ' for free-form editing'],
+                [$cmd('delete'),   $req('id'),   'Delete record ' . $req('id') . ' after confirmation'],
             ],
             'Sync' => [
                 [$cmd('refresh'),  '', 'Refresh all caches from YouTrack'],
@@ -301,11 +341,12 @@ final class App
             ],
             'Triggers' => [
                 [$cmd('checkout'), $req('branch') . ' ' . $req('repo'), 'Switch tracking on git checkout (called from ' . $cmd('hooks/post-checkout') . ')'],
+                [$cmd('server'),   $req('action'), 'Start (' . $val('start') . ') or stop (' . $val('stop') . ') the local timeshit server (auto-started by ' . Ansi::lblue('timeshit.php') . ' unless stopped)'],
             ],
         ];
 
         $argRows = [
-            [$req('issue'),  'YouTrack issue id, e.g. ' . $val('SW-1234') . ' or just ' . $val('1234')],
+            [$req('issue'),  'YouTrack issue id, e.g. ' . $val('SW-1234') . ' or just ' . $val('1234') . ' or free text for not yet created issues'],
             [$req('type'),   'work-item type; see ' . $cmd('types') . ' for the allowed list. Default: ' . Ansi::lgreen($config->defaultTrackType)],
             [$req('span'),   'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m')],
             [$req('time'),   $val('HH:MM') . ' or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
@@ -314,6 +355,8 @@ final class App
             [$req('id'),     'numeric record id (the ' . Ansi::lblack('#n') . ' column shown by ' . $cmd('local') . ' / ' . $cmd('status') . ')'],
             [$req('branch'), 'git branch name (used to extract the issue id; passed by git hook)'],
             [$req('repo'),   'repository name (passed by git hook)'],
+            [$req('search'), 'case-insensitive substring matched against issue title and description'],
+            [$req('action'), $val('start') . ' or ' . $val('stop')],
         ];
 
         $nameWidth = 0;
@@ -345,10 +388,20 @@ final class App
         }
     }
 
-    private function cmdIssues(): void
+    private function cmdIssues(?string $search): void
     {
         $data = $this->issueData->loadOrFetch();
-        (new IssuesView($this->config->youtrackBaseUrl, $data['user']))->render($data['issues'], $data['workItems']);
+        $issues = $data['issues'];
+        if ($search !== null && $search !== '') {
+            $needle = mb_strtolower($search);
+            $issues = array_values(array_filter(
+                $issues,
+                static fn(Issue $i): bool => str_contains(mb_strtolower($i->id), $needle)
+                    || str_contains(mb_strtolower($i->title), $needle)
+                    || str_contains(mb_strtolower($i->description), $needle),
+            ));
+        }
+        (new IssuesView($this->config->youtrackBaseUrl, $data['user']))->render($issues, $data['workItems']);
     }
 
     private function cmdRemote(): void
@@ -357,17 +410,31 @@ final class App
         (new WorkView($this->config->youtrackBaseUrl))->render($data['workItems'], $data['issues']);
     }
 
-    private function cmdLocal(): void
+    private function cmdLocal(?string $modifier): void
     {
+        $details = self::resolveDetailsFlag('local', $modifier);
         $items = $this->store->load();
-        (new RecordsView($this->config->youtrackBaseUrl))->render($items, $this->issueData->titles());
+        (new RecordsView($this->config->youtrackBaseUrl))->render($items, $this->issueData->titles(), $details);
     }
 
-    private function cmdAll(): void
+    private function cmdAll(?string $modifier): void
     {
+        $details = self::resolveDetailsFlag('all', $modifier);
         $data = $this->issueData->loadOrFetch();
         $records = $this->store->load();
-        (new AllView($this->config->youtrackBaseUrl))->render($data['workItems'], $records, $data['issues']);
+        (new AllView($this->config->youtrackBaseUrl))->render($data['workItems'], $records, $data['issues'], $details);
+    }
+
+    private static function resolveDetailsFlag(string $cmd, ?string $modifier): bool
+    {
+        if ($modifier === null || $modifier === '') {
+            return false;
+        }
+        if (Resolver::matchCommand($modifier, ['details']) === null) {
+            throw new RuntimeException("{$cmd}: unknown modifier '{$modifier}' (expected 'details')");
+        }
+
+        return true;
     }
 
     private function cmdStatus(): void
@@ -391,21 +458,182 @@ final class App
         }
         if ($active === null && $previous === null) {
             $this->io->out("No tracking records.\n");
+        } else {
+            $today = $this->clock->now()->format('Y-m-d');
+            $now = $this->clock->nowMinute();
+            $todayMinutes = 0;
+            foreach ($items as $r) {
+                if (substr($r->startedAt, 0, 10) !== $today) {
+                    continue;
+                }
+                if ($r->status === 'untracked' || $r->status === 'day') {
+                    continue;
+                }
+                $end = $r->endedAt ?? $now;
+                try {
+                    $s = new DateTimeImmutable($r->startedAt);
+                    $e = new DateTimeImmutable($end);
+                } catch (Exception) {
+                    continue;
+                }
+                $todayMinutes += max(0, intdiv($e->getTimestamp() - $s->getTimestamp(), 60));
+            }
+            $this->io->out(Ansi::lwhite('Today') . ": " . Format::minutes($todayMinutes) . "\n\n");
+
+            $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
+            $titleByIssueId = $this->issueData->titles();
+            if ($active !== null) {
+                $this->io->out(Ansi::lwhite('Active') . ":\n");
+                $this->io->out($this->statusLine($active, $baseUrl, $titleByIssueId) . "\n");
+            } else {
+                $this->io->out(Ansi::lblack('No active record.') . "\n");
+            }
+            if ($previous !== null) {
+                $this->io->out("\n" . Ansi::lwhite('Previous') . ":\n");
+                $this->io->out($this->statusLine($previous, $baseUrl, $titleByIssueId) . "\n");
+            }
+        }
+
+        $uptime = $this->probeServerUptime();
+        if ($uptime === null) {
+            $this->io->out("\n" . Ansi::lblack('timeshit server is not running') . "\n");
+        } else {
+            $this->io->out("\n" . Ansi::lgreen('timeshit server running for ' . Format::minutes(intdiv($uptime, 60))) . "\n");
+        }
+    }
+
+    private function probeServerUptime(): ?int
+    {
+        $client = @stream_socket_client('tcp://127.0.0.1:1885', $errno, $errstr, 0.5);
+        if ($client === false) {
+            return null;
+        }
+        fwrite($client, 'uptime');
+        $response = trim((string) fread($client, 1024));
+        fclose($client);
+        if ($response === '' || !ctype_digit($response)) {
+            return null;
+        }
+
+        return (int) $response;
+    }
+
+    private function cmdServer(?string $action): void
+    {
+        if ($action === null || $action === '') {
+            throw new RuntimeException("server: missing action (expected 'start' or 'stop')");
+        }
+        try {
+            $resolved = Resolver::matchCommand($action, ['start', 'stop']);
+        } catch (RuntimeException $e) {
+            throw new RuntimeException("server: " . $e->getMessage());
+        }
+        if ($resolved === null) {
+            throw new RuntimeException("server: unknown action '{$action}' (expected 'start' or 'stop')");
+        }
+        match ($resolved) {
+            'start' => $this->cmdServerStart(),
+            'stop' => $this->cmdServerStop(),
+            default => throw new RuntimeException("server: no handler for resolved action '{$resolved}'"),
+        };
+    }
+
+    private function cmdServerStart(): void
+    {
+        $runningPid = $this->runningServerPid();
+        if ($runningPid !== null) {
+            $this->io->out(Ansi::lblack("timeshit server is already running (pid {$runningPid})") . "\n");
 
             return;
         }
-        $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
-        $titleByIssueId = $this->issueData->titles();
-        if ($active !== null) {
-            $this->io->out(Ansi::lwhite('Active') . ":\n");
-            $this->io->out($this->statusLine($active, $baseUrl, $titleByIssueId) . "\n");
-        } else {
-            $this->io->out(Ansi::lblack('No active record.') . "\n");
+        $this->spawnServer();
+        $this->io->out("timeshit server started\n");
+    }
+
+    private function spawnServer(): void
+    {
+        if (is_file($this->serverPidFile)) {
+            unlink($this->serverPidFile);
         }
-        if ($previous !== null) {
-            $this->io->out("\n" . Ansi::lwhite('Previous') . ":\n");
-            $this->io->out($this->statusLine($previous, $baseUrl, $titleByIssueId) . "\n");
+        exec('setsid ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($this->serverScript) . ' < /dev/null > /dev/null 2>&1 &');
+    }
+
+    /**
+     * Auto-recovery: if the pid file exists, was not put into the explicit
+     * `'stopped'` state by `server stop`, and the pid no longer points at a
+     * live process (crash / OS kill / reboot), respawn the server. Missing
+     * pid file → never started; do nothing.
+     */
+    private function maybeAutoStartServer(): void
+    {
+        if (!is_file($this->serverPidFile)) {
+            return;
         }
+        $contents = file_get_contents($this->serverPidFile);
+        if ($contents === false) {
+            return;
+        }
+        if (trim($contents) === 'stopped') {
+            return;
+        }
+        if ($this->runningServerPid() !== null) {
+            return;
+        }
+        $this->spawnServer();
+        $this->io->err(Ansi::lblack('timeshit server auto-restarted') . "\n");
+    }
+
+    private function cmdServerStop(): void
+    {
+        $runningPid = $this->runningServerPid();
+        if ($runningPid === null) {
+            if (is_file($this->serverPidFile) && trim((string) file_get_contents($this->serverPidFile)) === 'stopped') {
+                $this->io->out(Ansi::lblack('timeshit server is already stopped') . "\n");
+            } else {
+                file_put_contents($this->serverPidFile, 'stopped');
+                $this->io->out("timeshit server stopped\n");
+            }
+
+            return;
+        }
+        // Write the sentinel before killing so the server's shutdown handler leaves it alone.
+        file_put_contents($this->serverPidFile, 'stopped');
+        posix_kill($runningPid, 15);
+        $this->io->out("timeshit server stopped (pid {$runningPid})\n");
+    }
+
+    private function runningServerPid(): ?int
+    {
+        if (!is_file($this->serverPidFile)) {
+            return null;
+        }
+        $contents = file_get_contents($this->serverPidFile);
+        if ($contents === false) {
+            return null;
+        }
+        $value = trim($contents);
+        if ($value === '' || !ctype_digit($value)) {
+            return null;
+        }
+        $pid = (int) $value;
+        if ($pid <= 0 || !posix_kill($pid, 0)) {
+            return null;
+        }
+
+        return $pid;
+    }
+
+    /** `SW-1234 #25 Issue title` — clickable issue id, dim record id, default-color title (if known). For inline action messages. */
+    private function actionRef(string $issueId, int $recordId): string
+    {
+        $url = rtrim($this->config->youtrackBaseUrl, '/') . '/issue/' . $issueId;
+        $ref = Ansi::link($url, $issueId) . ' ' . Format::recordId($recordId);
+        $title = $this->issueData->titles()[$issueId] ?? '';
+        if ($title !== '') {
+            $ref .= ' ' . $title;
+        }
+
+        return $ref;
     }
 
     /** @param array<string, string> $titleByIssueId */
@@ -478,24 +706,60 @@ final class App
         $this->types->refresh();
     }
 
-    private function cmdType(?string $newType): void
+    private function cmdType(?string $rest): void
     {
-        $matched = Resolver::resolveType('type', $newType, null, $this->types->types(...), $this->config->allowedTypes, $this->config->typeAliases);
-        $result = $this->store->changeOpenType($matched, $this->clock->nowMinute(), 'type');
-        $item = $result['item'];
-        if ($item === null) {
-            throw new RuntimeException('type: no open tracking entry to update');
-        }
-        if (!$result['changed']) {
+        [$id, $rest] = Resolver::peelRecordId('type', $rest);
+        $matched = Resolver::resolveType('type', $rest, null, $this->types->types(...), $this->config->allowedTypes, $this->config->typeAliases);
+        if ($id === null) {
+            $result = $this->store->changeOpenType($matched, $this->clock->nowMinute(), 'type');
+            $item = $result['item'];
+            if ($item === null) {
+                throw new RuntimeException('type: no open tracking entry to update');
+            }
+            if (!$result['changed']) {
+                return;
+            }
+            $this->io->err(sprintf(
+                "Changed type of %s %s from %s to %s\n",
+                $item->issueId,
+                Format::recordId($item->id),
+                (string) $result['previousType'],
+                $matched,
+            ));
+
             return;
         }
-        $this->io->err(sprintf(
-            "Changed type of %s %s from %s to %s\n",
-            $item->issueId,
-            Format::recordId($item->id),
-            (string) $result['previousType'],
-            $matched,
-        ));
+        $this->store->transaction(function () use ($id, $matched): void {
+            $items = $this->store->load();
+            $index = null;
+            foreach ($items as $i => $r) {
+                if ($r->id === $id) {
+                    $index = $i;
+                    break;
+                }
+            }
+            if ($index === null) {
+                throw new RuntimeException("type: record #{$id} not found");
+            }
+            $current = $items[$index];
+            if ($current->status === 'day') {
+                throw new RuntimeException("type: refusing to edit day record #{$id}");
+            }
+            if ($current->type === $matched) {
+                return;
+            }
+            $previous = $current->type;
+            $updated = $current->withType($matched, $this->clock->nowMinute(), 'type');
+            $items[$index] = $updated;
+            $this->store->save(array_values($items));
+            $this->io->err(sprintf(
+                "Changed type of %s %s from %s to %s\n",
+                $updated->issueId,
+                Format::recordId($updated->id),
+                $previous,
+                $matched,
+            ));
+        });
     }
 
     private function cmdSwitch(?string $newType): void
@@ -524,14 +788,13 @@ final class App
             $stopped = $result['stopped'];
             if ($stopped !== null && $stopped->endedAt !== null) {
                 $this->io->err(sprintf(
-                    "Stopped %s %s (%s) after %s\n",
-                    $stopped->issueId,
-                    Format::recordId($stopped->id),
-                    $stopped->type,
-                    Format::duration($stopped->startedAt, $stopped->endedAt),
+                    "Stopped %s as %s after %s\n",
+                    $this->actionRef($stopped->issueId, $stopped->id),
+                    Format::typeInline($stopped->type),
+                    Format::durationInline($stopped->startedAt, $stopped->endedAt),
                 ));
             }
-            $this->io->err(sprintf("Tracking %s %s as %s\n", $next->issueId, Format::recordId($next->id), $matched));
+            $this->io->err(sprintf("Tracking %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($matched)));
         });
     }
 
@@ -545,13 +808,12 @@ final class App
         }
         $endedAt = $item->endedAt ?? '';
         $this->io->err(sprintf(
-            "Stopped %s %s after %s\n",
-            $item->issueId,
-            Format::recordId($item->id),
-            Format::duration($item->startedAt, $endedAt),
+            "Stopped %s after %s\n",
+            $this->actionRef($item->issueId, $item->id),
+            Format::durationInline($item->startedAt, $endedAt),
         ));
         if ($item->note !== '') {
-            $this->io->err(sprintf("Note: %s\n", $item->note));
+            $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $item->note . '"')));
         }
     }
 
@@ -566,13 +828,12 @@ final class App
             }
             $endedAt = $item->endedAt ?? '';
             $this->io->err(sprintf(
-                "Stopped %s %s after %s\n",
-                $item->issueId,
-                Format::recordId($item->id),
-                Format::duration($item->startedAt, $endedAt),
+                "Stopped %s after %s\n",
+                $this->actionRef($item->issueId, $item->id),
+                Format::durationInline($item->startedAt, $endedAt),
             ));
             if ($item->note !== '') {
-                $this->io->err(sprintf("Note: %s\n", $item->note));
+                $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $item->note . '"')));
             }
 
             $items = $this->store->load();
@@ -596,7 +857,7 @@ final class App
                 log: Record::logCreated($now, 'done'),
             );
             $this->store->track($next, 'done');
-            $this->io->err(sprintf("Resumed %s %s as %s\n", $next->issueId, Format::recordId($next->id), $next->type));
+            $this->io->err(sprintf("Resumed %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($next->type)));
         });
     }
 
@@ -627,21 +888,20 @@ final class App
             $stopped = $result['stopped'];
             if ($stopped !== null && $stopped->endedAt !== null) {
                 $this->io->err(sprintf(
-                    "Paused %s %s after %s\n",
-                    $stopped->issueId,
-                    Format::recordId($stopped->id),
-                    Format::duration($stopped->startedAt, $stopped->endedAt),
+                    "Paused %s after %s\n",
+                    $this->actionRef($stopped->issueId, $stopped->id),
+                    Format::durationInline($stopped->startedAt, $stopped->endedAt),
                 ));
             }
             if ($break->note !== '') {
-                $this->io->err(sprintf("Note: %s\n", $break->note));
+                $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $break->note . '"')));
             }
         });
     }
 
-    private function cmdResume(?string $note): void
+    private function cmdResume(): void
     {
-        $this->store->transaction(function () use ($note): void {
+        $this->store->transaction(function (): void {
             $items = $this->store->load();
             if ($items === []) {
                 throw new RuntimeException('resume: no record to resume');
@@ -678,13 +938,9 @@ final class App
                 startedAt: $now,
                 endedAt: null,
                 log: Record::logCreated($now, 'resume'),
-                note: $note ?? '',
             );
             $this->store->track($next, 'resume');
-            $this->io->err(sprintf("Resumed %s %s as %s\n", $next->issueId, Format::recordId($next->id), $next->type));
-            if ($next->note !== '') {
-                $this->io->err(sprintf("Note: %s\n", $next->note));
-            }
+            $this->io->err(sprintf("Resumed %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($next->type)));
         });
     }
 
@@ -701,9 +957,6 @@ final class App
 
             $nowDt = $this->clock->now();
             $endDt = $nowDt->modify("-{$spanMin} minutes");
-            if ($endDt === false) {
-                throw new RuntimeException("skip: invalid span");
-            }
             try {
                 $startDt = new DateTimeImmutable($last->startedAt);
             } catch (Exception) {
@@ -731,10 +984,9 @@ final class App
             $this->store->save($items);
 
             $this->io->err(sprintf(
-                "Skipped %s of %s %s: ended at %s, restarted at %s\n",
-                Format::duration($endedAt, $now),
-                $last->issueId,
-                Format::recordId($last->id),
+                "Skipped %s of %s: ended at %s, restarted at %s\n",
+                Format::durationInline($endedAt, $now),
+                $this->actionRef($last->issueId, $last->id),
                 $endedAt,
                 $now,
             ));
@@ -756,9 +1008,6 @@ final class App
 
             $nowDt = $this->clock->now();
             $splitDt = $nowDt->modify("-{$spanMin} minutes");
-            if ($splitDt === false) {
-                throw new RuntimeException("grab: invalid span");
-            }
             try {
                 $startDt = new DateTimeImmutable($last->startedAt);
             } catch (Exception) {
@@ -796,13 +1045,11 @@ final class App
             $this->store->save($items);
 
             $this->io->err(sprintf(
-                "Grabbed %s of %s %s (%s) from %s %s between %s and %s\n",
-                Format::duration($splitAt, $now),
-                $issueId,
-                Format::recordId($grabbed->id),
-                $resolvedType,
-                $last->issueId,
-                Format::recordId($last->id),
+                "Grabbed %s of %s as %s from %s between %s and %s\n",
+                Format::durationInline($splitAt, $now),
+                $this->actionRef($issueId, $grabbed->id),
+                Format::typeInline($resolvedType),
+                $this->actionRef($last->issueId, $last->id),
                 substr($splitAt, 11),
                 substr($now, 11),
             ));
@@ -818,9 +1065,6 @@ final class App
         $this->store->transaction(function () use ($issueId, $spanMin, $resolvedType): void {
             $midnight = $this->clock->now()->setTime(0, 0);
             $endDt = $midnight->modify("+{$spanMin} minutes");
-            if ($endDt === false) {
-                throw new RuntimeException('put: invalid span');
-            }
             $start = $midnight->format('Y-m-d H:i');
             $end = $endDt->format('Y-m-d H:i');
             $log = Record::logCreated($start, 'put') . ' | ' . Record::logClosed($end, 'put');
@@ -834,30 +1078,60 @@ final class App
             );
             $this->store->appendClosed($record);
             $this->io->err(sprintf(
-                "Put %s %s as %s (%s)\n",
-                $issueId,
-                Format::recordId($record->id),
-                $resolvedType,
-                Format::duration($start, $end),
+                "Put %s as %s (%s)\n",
+                $this->actionRef($issueId, $record->id),
+                Format::typeInline($resolvedType),
+                Format::durationInline($start, $end),
             ));
         });
     }
 
-    private function cmdNote(?string $note): void
+    private function cmdNote(?string $rest): void
     {
+        [$id, $note] = Resolver::peelRecordId('note', $rest);
         if ($note === null || $note === '') {
             throw new RuntimeException('note: missing <text>');
         }
-        $result = $this->store->noteLast($note, $this->clock->nowMinute(), 'note');
-        $item = $result['item'];
-        if ($item === null) {
-            throw new RuntimeException('note: no record to add note to');
-        }
-        if (!$result['changed']) {
+        if ($id === null) {
+            $result = $this->store->noteLast($note, $this->clock->nowMinute(), 'note');
+            $item = $result['item'];
+            if ($item === null) {
+                throw new RuntimeException('note: no record to add note to');
+            }
+            if (!$result['changed']) {
+                return;
+            }
+            $where = $item->isOpen() ? 'active' : 'last closed';
+            $this->io->err(sprintf("Note on %s (%s): %s\n", $this->actionRef($item->issueId, $item->id), $where, Ansi::lblack('"' . $item->note . '"')));
+
             return;
         }
-        $where = $item->isOpen() ? 'active' : 'last closed';
-        $this->io->err(sprintf("Note on %s %s (%s): %s\n", $item->issueId, Format::recordId($item->id), $where, $item->note));
+        $this->store->transaction(function () use ($id, $note): void {
+            $items = $this->store->load();
+            $index = null;
+            foreach ($items as $i => $r) {
+                if ($r->id === $id) {
+                    $index = $i;
+                    break;
+                }
+            }
+            if ($index === null) {
+                throw new RuntimeException("note: record #{$id} not found");
+            }
+            $current = $items[$index];
+            if ($current->status === 'day') {
+                throw new RuntimeException("note: refusing to edit day record #{$id}");
+            }
+            $merged = $current->note === '' ? $note : $current->note . ' | ' . $note;
+            if ($merged === $current->note) {
+                return;
+            }
+            $updated = $current->withNote($merged, $this->clock->nowMinute(), 'note');
+            $items[$index] = $updated;
+            $this->store->save(array_values($items));
+            $where = $updated->isOpen() ? 'active' : 'closed';
+            $this->io->err(sprintf("Note on %s (%s): %s\n", $this->actionRef($updated->issueId, $updated->id), $where, Ansi::lblack('"' . $updated->note . '"')));
+        });
     }
 
     private function cmdEdit(?string $idArg): void
@@ -901,8 +1175,11 @@ final class App
 
         try {
             $cmd = $this->config->editor . ' ' . escapeshellarg($tempPath);
-            $exitCode = 0;
-            system($cmd, $exitCode);
+            $proc = proc_open($cmd, [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes);
+            if (!is_resource($proc)) {
+                throw new RuntimeException("edit: failed to launch editor '{$this->config->editor}'");
+            }
+            $exitCode = proc_close($proc);
             if ($exitCode !== 0) {
                 throw new RuntimeException("edit: editor '{$this->config->editor}' exited with code {$exitCode}");
             }
@@ -1006,11 +1283,50 @@ final class App
                 ? 'log rewritten by user'
                 : ($changedFields === [] ? 'no field changes' : 'changed: ' . implode(', ', $changedFields));
             $this->io->err(sprintf(
-                "Edited %s %s (%s)\n",
-                $final->issueId,
-                Format::recordId($final->id),
+                "Edited %s (%s)\n",
+                $this->actionRef($final->issueId, $final->id),
                 $summary,
             ));
+        });
+    }
+
+    private function cmdDelete(?string $idArg): void
+    {
+        if ($idArg === null || $idArg === '') {
+            throw new RuntimeException('delete: missing <id>');
+        }
+        if (!ctype_digit($idArg)) {
+            throw new RuntimeException("delete: invalid id '{$idArg}' (expected positive integer)");
+        }
+        $id = (int) $idArg;
+
+        $this->store->transaction(function () use ($id): void {
+            $items = $this->store->load();
+            $index = null;
+            foreach ($items as $i => $r) {
+                if ($r->id === $id) {
+                    $index = $i;
+                    break;
+                }
+            }
+            if ($index === null) {
+                throw new RuntimeException("delete: record #{$id} not found");
+            }
+            $target = $items[$index];
+
+            $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
+            $titleByIssueId = $this->issueData->titles();
+            $this->io->err($this->statusLine($target, $baseUrl, $titleByIssueId) . "\n\n");
+
+            if (!$this->confirm('Delete this record?')) {
+                $this->io->err("Cancelled.\n");
+
+                return;
+            }
+
+            unset($items[$index]);
+            $this->store->save(array_values($items));
+            $this->io->err(sprintf("Deleted %s\n", $this->actionRef($target->issueId, $target->id)));
         });
     }
 
@@ -1025,7 +1341,7 @@ final class App
     {
         $issueId = $this->resolveIssueArg('interrupt', $issue);
         $resolvedType = Resolver::resolveType('interrupt', $type, $this->config->defaultTrackType, $this->types->types(...), $this->config->allowedTypes, $this->config->typeAliases);
-        $this->startRecord($issueId, $resolvedType, 'interrupt', forceInterruptIfOpen: true);
+        $this->startRecord($issueId, $resolvedType, 'interrupt', pauseClosed: true);
     }
 
     private function cmdMeeting(?string $note): void
@@ -1035,15 +1351,82 @@ final class App
             $this->config->defaultMeetingIssue,
             $this->config->defaultMeetingType,
             'meeting',
-            forceInterruptIfOpen: true,
+            pauseClosed: true,
             note: $resolved,
+        );
+    }
+
+    private function cmdMail(?string $note): void
+    {
+        $resolved = $note === '' ? null : $note;
+        $this->startRecord(
+            $this->config->defaultMailIssue,
+            $this->config->defaultMailType,
+            'mail',
+            pauseClosed: true,
+            note: $resolved,
+        );
+    }
+
+    private function cmdReview(?string $issue): void
+    {
+        $issueId = $this->resolveIssueArg('review', $issue);
+        $this->startRecord(
+            $issueId,
+            $this->config->defaultReviewType,
+            'review',
+            pauseClosed: false,
+        );
+    }
+
+    private function cmdTest(?string $issue): void
+    {
+        $issueId = $this->resolveIssueArg('test', $issue);
+        $this->startRecord(
+            $issueId,
+            $this->config->defaultTestType,
+            'test',
+            pauseClosed: false,
+        );
+    }
+
+    private function cmdImplement(?string $issue): void
+    {
+        $issueId = $this->resolveIssueArg('implement', $issue);
+        $this->startRecord(
+            $issueId,
+            $this->config->defaultImplementType,
+            'implement',
+            pauseClosed: false,
+        );
+    }
+
+    private function cmdAnalyse(?string $issue): void
+    {
+        $issueId = $this->resolveIssueArg('analyse', $issue);
+        $this->startRecord(
+            $issueId,
+            $this->config->defaultAnalyseType,
+            'analyse',
+            pauseClosed: false,
+        );
+    }
+
+    private function cmdDesign(?string $issue): void
+    {
+        $issueId = $this->resolveIssueArg('design', $issue);
+        $this->startRecord(
+            $issueId,
+            $this->config->defaultDesignType,
+            'design',
+            pauseClosed: false,
         );
     }
 
     private function cmdDay(?string $issue, ?string $date, ?string $type): void
     {
         $issueId = $this->resolveIssueArg('day', $issue);
-        $when = Resolver::resolveDate($date);
+        $when = Resolver::resolveDate($date, 'day', $this->clock->now()->setTime(0, 0));
         $resolvedType = Resolver::resolveType('day', $type, $this->config->defaultDayType, $this->types->types(...), $this->config->allowedTypes, $this->config->typeAliases);
         $dayKey = $when->format('Y-m-d');
         $this->store->transaction(function () use ($issueId, $when, $resolvedType, $dayKey): void {
@@ -1088,8 +1471,9 @@ final class App
         if ($to === null || $to === '') {
             throw new RuntimeException('vacation: missing <to>');
         }
-        $fromDt = Resolver::resolveDate($from, 'vacation')->setTime(0, 0);
-        $toDt = Resolver::resolveDate($to, 'vacation')->setTime(0, 0);
+        $today = $this->clock->now()->setTime(0, 0);
+        $fromDt = Resolver::resolveDate($from, 'vacation', $today)->setTime(0, 0);
+        $toDt = Resolver::resolveDate($to, 'vacation', $today)->setTime(0, 0);
         if ($fromDt > $toDt) {
             throw new RuntimeException(
                 "vacation: <from> ({$fromDt->format('Y-m-d')}) is after <to> ({$toDt->format('Y-m-d')})",
@@ -1162,7 +1546,11 @@ final class App
         if ($repo === null || $repo === '') {
             throw new RuntimeException('checkout: missing <repo>');
         }
-        $this->startRecord(Resolver::extractIssueId($branch), null, 'checkout');
+        $issueId = Resolver::extractIssueId($branch, $this->config->defaultIssuePrefix);
+        if (Resolver::isStandardIssueId($issueId)) {
+            $this->issueData->ensureIssue($issueId);
+        }
+        $this->startRecord($issueId, null, 'checkout');
     }
 
     private function resolveIssueArg(string $cmd, ?string $issue): string
@@ -1170,31 +1558,39 @@ final class App
         $issueId = Resolver::requireIssueId($cmd, $issue, $this->config->defaultIssuePrefix);
         if (!Resolver::isStandardIssueId($issueId)) {
             $this->io->err(Ansi::lyellow("Warning: '{$issueId}' has unusual issue id format (expected ABC-123)") . "\n");
+
+            return $issueId;
         }
+        $this->issueData->ensureIssue($issueId);
 
         return $issueId;
     }
 
+    /**
+     * @param ?bool $pauseClosed null = use type-based auto-detection (default for `track` / `checkout`);
+     *                           true = always pause the closed record (`interrupt` / `meeting` / `mail`);
+     *                           false = never pause, plain track-replace (`review` / `test`).
+     */
     private function startRecord(
         string $issueId,
         ?string $type,
         string $trigger,
-        bool $forceInterruptIfOpen = false,
+        ?bool $pauseClosed = null,
         ?string $note = null,
     ): void {
         $resolvedType = $type === null || $type === '' ? $this->config->defaultTrackType : $type;
 
-        $this->store->transaction(function () use ($issueId, $resolvedType, $trigger, $forceInterruptIfOpen, $note): void {
+        $this->store->transaction(function () use ($issueId, $resolvedType, $trigger, $pauseClosed, $note): void {
             $items = $this->store->load();
             $last = $items === [] ? null : $items[count($items) - 1];
-            $pauseClosed = false;
+            $effectivePause = false;
             if ($last !== null && $last->isOpen()) {
-                if ($forceInterruptIfOpen) {
-                    $pauseClosed = true;
+                if ($pauseClosed !== null) {
+                    $effectivePause = $pauseClosed;
                 } elseif ($last->type === $this->config->defaultTrackType
                     && in_array($resolvedType, $this->config->interruptionTypes, true)
                 ) {
-                    $pauseClosed = true;
+                    $effectivePause = true;
                 }
             }
 
@@ -1208,62 +1604,80 @@ final class App
                 log: Record::logCreated($now, $trigger),
                 note: $note ?? '',
             );
-            $result = $this->store->track($next, $trigger, $pauseClosed);
+            $result = $this->store->track($next, $trigger, $effectivePause);
             if (!$result['started']) {
                 return;
             }
             $stopped = $result['stopped'];
             if ($stopped !== null && $stopped->endedAt !== null) {
                 $this->io->err(sprintf(
-                    "Stopped %s %s after %s\n",
-                    $stopped->issueId,
-                    Format::recordId($stopped->id),
-                    Format::duration($stopped->startedAt, $stopped->endedAt),
+                    "Stopped %s as %s after %s\n",
+                    $this->actionRef($stopped->issueId, $stopped->id),
+                    Format::typeInline($stopped->type),
+                    Format::durationInline($stopped->startedAt, $stopped->endedAt),
                 ));
             }
-            $this->io->err(sprintf("Tracking %s %s as %s\n", $next->issueId, Format::recordId($next->id), $resolvedType));
+            $this->io->err(sprintf("Tracking %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($resolvedType)));
             if ($next->note !== '') {
-                $this->io->err(sprintf("Note: %s\n", $next->note));
+                $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $next->note . '"')));
             }
         });
     }
 
-    private function cmdAt(?string $time): void
+    private function cmdAt(?string $rest): void
     {
-        $this->modifyTimes('at', 'set', $time);
+        [$id, $arg] = Resolver::peelRecordId('at', $rest);
+        $this->modifyTimes('at', 'set', $arg, $id);
     }
 
-    private function cmdBefore(?string $span): void
+    private function cmdBefore(?string $rest): void
     {
-        $this->modifyTimes('before', 'sub', $span);
+        [$id, $arg] = Resolver::peelRecordId('before', $rest);
+        $this->modifyTimes('before', 'sub', $arg, $id);
     }
 
-    private function cmdAfter(?string $span): void
+    private function cmdAfter(?string $rest): void
     {
-        $this->modifyTimes('after', 'add', $span);
+        [$id, $arg] = Resolver::peelRecordId('after', $rest);
+        $this->modifyTimes('after', 'add', $arg, $id);
     }
 
-    private function modifyTimes(string $cmd, string $mode, ?string $arg): void
+    private function modifyTimes(string $cmd, string $mode, ?string $arg, ?int $targetId): void
     {
-        $this->store->transaction(function () use ($cmd, $mode, $arg): void {
-            $this->modifyTimesLocked($cmd, $mode, $arg);
+        $this->store->transaction(function () use ($cmd, $mode, $arg, $targetId): void {
+            $this->modifyTimesLocked($cmd, $mode, $arg, $targetId);
         });
     }
 
-    private function modifyTimesLocked(string $cmd, string $mode, ?string $arg): void
+    private function modifyTimesLocked(string $cmd, string $mode, ?string $arg, ?int $targetId): void
     {
         $items = $this->store->load();
 
         $targetIndex = null;
-        for ($i = count($items) - 1; $i >= 0; $i--) {
-            if ($items[$i]->status === 'day') {
-                continue;
+        if ($targetId !== null) {
+            foreach ($items as $i => $r) {
+                if ($r->id === $targetId) {
+                    $targetIndex = $i;
+                    break;
+                }
             }
-            $targetIndex = $i;
-            break;
-        }
-        if ($targetIndex === null) {
-            throw new RuntimeException("{$cmd}: no record to modify");
+            if ($targetIndex === null) {
+                throw new RuntimeException("{$cmd}: record #{$targetId} not found");
+            }
+            if ($items[$targetIndex]->status === 'day') {
+                throw new RuntimeException("{$cmd}: refusing to edit day record #{$targetId}");
+            }
+        } else {
+            for ($i = count($items) - 1; $i >= 0; $i--) {
+                if ($items[$i]->status === 'day') {
+                    continue;
+                }
+                $targetIndex = $i;
+                break;
+            }
+            if ($targetIndex === null) {
+                throw new RuntimeException("{$cmd}: no record to modify");
+            }
         }
 
         $target = $items[$targetIndex];
@@ -1292,11 +1706,7 @@ final class App
                 throw new RuntimeException("{$cmd}: invalid existing time '{$existing}'");
             }
             $sign = $mode === 'sub' ? '-' : '+';
-            $modified = $existingDt->modify("{$sign}{$spanMin} minutes");
-            if ($modified === false) {
-                throw new RuntimeException("{$cmd}: invalid span");
-            }
-            $newDt = $modified;
+            $newDt = $existingDt->modify("{$sign}{$spanMin} minutes");
         }
         $newValue = $newDt->format('Y-m-d H:i');
 
@@ -1377,20 +1787,20 @@ final class App
         if ($r->endedAt === null) {
             $now = $this->clock->nowMinute();
             $duration = Format::duration($r->startedAt, $now) . ' so far';
-            $end = '  ...';
+            $timeRange = $start . ' ' . Ansi::lblack('→') . ' ' . Ansi::lgreen('  …  ');
         } else {
             $duration = Format::duration($r->startedAt, $r->endedAt);
-            $end = substr($r->endedAt, 11);
+            $timeRange = $start . Ansi::lblack('–') . substr($r->endedAt, 11);
         }
+        $url = rtrim($this->config->youtrackBaseUrl, '/') . '/issue/' . $r->issueId;
 
         return sprintf(
-            '  %-9s %s  %-22s  %s → %-5s  (%s)',
-            $r->issueId,
+            '  %s %s  %s  %s  %s',
+            Ansi::link($url, sprintf('%-9s', $r->issueId)),
             Format::recordId($r->id),
-            $r->type,
-            $start,
-            $end,
-            $duration,
+            Format::type($r->type),
+            $timeRange,
+            Ansi::lblack('(' . $duration . ')'),
         );
     }
 
@@ -1407,7 +1817,7 @@ final class App
 
     private function cmdPush(?string $dateArg): void
     {
-        $cutoffKey = Resolver::resolveDate($dateArg ?? 'yesterday', 'push')->format('Y-m-d');
+        $cutoffKey = Resolver::resolveDate($dateArg ?? 'yesterday', 'push', $this->clock->now()->setTime(0, 0))->format('Y-m-d');
 
         $records = $this->store->load();
         /** @var list<Record> $eligible */

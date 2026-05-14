@@ -45,13 +45,13 @@ final class IssuesView
             . '  m' . Ansi::lblack('=mentioned')
             . "\n\n";
 
-        $format = "%-8s %-8s %-8s %-12s %-8s %-17s %-11s %-11s %s\n";
+        $format = "%-8s %-8s %-11s %-12s %-8s %-17s %-11s %-11s %s\n";
         printf($format, 'ID', 'TYPE', 'CAT.', 'STATE', 'ROLES', 'ASSIGNEE', '   SPENT', '    ALL', 'TITLE');
         printf(
             $format,
             str_repeat('-', 8),
             str_repeat('-', 8),
-            str_repeat('-', 8),
+            str_repeat('-', 11),
             str_repeat('-', 12),
             str_repeat('-', 8),
             str_repeat('-', 17),

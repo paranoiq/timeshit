@@ -43,4 +43,24 @@ if (!is_file($rootDir . '/config/secrets.neon')) {
     exit(0);
 }
 
+$pidFile = $rootDir . '/data/server.pid';
+$autoStart = true;
+if (is_file($pidFile)) {
+    $pidContents = file_get_contents($pidFile);
+    if ($pidContents !== false) {
+        $value = trim($pidContents);
+        if ($value === 'stopped') {
+            $autoStart = false;
+        } else {
+            $pid = (int) $value;
+            if ($pid > 0 && posix_kill($pid, 0)) {
+                $autoStart = false;
+            }
+        }
+    }
+}
+if ($autoStart) {
+    exec('setsid ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($rootDir . '/server.php') . ' < /dev/null > /dev/null 2>&1 &');
+}
+
 exit(App::forRoot($rootDir, $config, $io)->run($argv));

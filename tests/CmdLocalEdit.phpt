@@ -277,3 +277,51 @@ $io->clear();
 Assert::same(1, $app->run(['ts', 'grab', 'XYZ-9', '30m']));
 Assert::contains('span too large', $io->getErr());
 Assert::count(1, $store->load());
+
+
+// === at / before / after with explicit #id targeting ===
+
+// 21. at #id targets a closed earlier record (not the latest one)
+[$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'end']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'track', 'ABC-2']);
+$io->setInputs(['y']);
+Assert::same(0, $app->run(['ts', 'at', '#1', '11:00']));
+$items = $store->load();
+Assert::same('2026-05-09 11:00', $items[0]->endedAt);
+Assert::null($items[1]->endedAt);
+Assert::same('2026-05-09 11:00', $items[1]->startedAt); // ABC-2 untouched
+
+// 22. before #id shifts an earlier closed record's endedAt
+[$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+1 hour');
+$app->run(['ts', 'end']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'track', 'ABC-2']);
+$io->setInputs(['y']);
+Assert::same(0, $app->run(['ts', 'before', '#1', '15m']));
+$items = $store->load();
+Assert::same('2026-05-09 10:45', $items[0]->endedAt);
+
+// 23. after #id shifts an earlier closed record's endedAt forward
+[$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+1 hour');
+$app->run(['ts', 'end']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'track', 'ABC-2']);
+$io->setInputs(['y']);
+Assert::same(0, $app->run(['ts', 'after', '#1', '15m']));
+$items = $store->load();
+Assert::same('2026-05-09 11:15', $items[0]->endedAt);
+
+// 24. at #id with unknown id errors
+[$app, , , $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$io->clear();
+Assert::same(1, $app->run(['ts', 'at', '#99', '09:30']));
+Assert::contains('record #99 not found', $io->getErr());

@@ -35,6 +35,13 @@ final class Config
         public readonly array $interruptionTypes,
         public readonly string $defaultMeetingType,
         public readonly string $defaultMeetingIssue,
+        public readonly string $defaultMailType,
+        public readonly string $defaultMailIssue,
+        public readonly string $defaultReviewType,
+        public readonly string $defaultTestType,
+        public readonly string $defaultImplementType,
+        public readonly string $defaultAnalyseType,
+        public readonly string $defaultDesignType,
         public readonly string $defaultOutOfOfficeType,
         public readonly string $defaultOutOfOfficeIssue,
         public readonly string $editor,
@@ -63,6 +70,13 @@ final class Config
             $cfg['interruptionTypes'],
             $cfg['defaultMeetingType'],
             $cfg['defaultMeetingIssue'],
+            $cfg['defaultMailType'],
+            $cfg['defaultMailIssue'],
+            $cfg['defaultReviewType'],
+            $cfg['defaultTestType'],
+            $cfg['defaultImplementType'],
+            $cfg['defaultAnalyseType'],
+            $cfg['defaultDesignType'],
             $cfg['defaultOutOfOfficeType'],
             $cfg['defaultOutOfOfficeIssue'],
             $cfg['editor'],
@@ -79,7 +93,7 @@ final class Config
         return self::readConfig($rootDir)['timezone'];
     }
 
-    /** @return array{youtrackBaseUrl: string, timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, typeAliases: array<string, list<string>>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>, defaultMeetingType: string, defaultMeetingIssue: string, defaultOutOfOfficeType: string, defaultOutOfOfficeIssue: string, editor: string} */
+    /** @return array{youtrackBaseUrl: string, timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, typeAliases: array<string, list<string>>, defaultTrackType: string, defaultDayType: string, interruptionTypes: list<string>, defaultMeetingType: string, defaultMeetingIssue: string, defaultMailType: string, defaultMailIssue: string, defaultReviewType: string, defaultTestType: string, defaultImplementType: string, defaultAnalyseType: string, defaultDesignType: string, defaultOutOfOfficeType: string, defaultOutOfOfficeIssue: string, editor: string} */
     private static function readConfig(string $rootDir): array
     {
         $path = $rootDir . self::CONFIG_FILE;
@@ -111,11 +125,21 @@ final class Config
         $defaultTrackType = self::requireDefaultType($data, 'defaultTrackType', $names, $path);
         $defaultDayType = self::requireDefaultType($data, 'defaultDayType', $names, $path);
         $defaultMeetingType = self::requireDefaultType($data, 'defaultMeetingType', $names, $path);
+        $defaultMailType = self::requireDefaultType($data, 'defaultMailType', $names, $path);
+        $defaultReviewType = self::requireDefaultType($data, 'defaultReviewType', $names, $path);
+        $defaultTestType = self::requireDefaultType($data, 'defaultTestType', $names, $path);
+        $defaultImplementType = self::requireDefaultType($data, 'defaultImplementType', $names, $path);
+        $defaultAnalyseType = self::requireDefaultType($data, 'defaultAnalyseType', $names, $path);
+        $defaultDesignType = self::requireDefaultType($data, 'defaultDesignType', $names, $path);
         $defaultOutOfOfficeType = self::requireDefaultType($data, 'defaultOutOfOfficeType', $names, $path);
         $interruptionTypes = self::readInterruptionTypes($data, $names, $defaultTrackType, $path);
         $defaultMeetingIssue = $data['defaultMeetingIssue'] ?? null;
         if (!is_string($defaultMeetingIssue) || $defaultMeetingIssue === '') {
             throw new RuntimeException("Missing defaultMeetingIssue in {$path}");
+        }
+        $defaultMailIssue = $data['defaultMailIssue'] ?? null;
+        if (!is_string($defaultMailIssue) || $defaultMailIssue === '') {
+            throw new RuntimeException("Missing defaultMailIssue in {$path}");
         }
         $defaultOutOfOfficeIssue = $data['defaultOutOfOfficeIssue'] ?? null;
         if (!is_string($defaultOutOfOfficeIssue) || $defaultOutOfOfficeIssue === '') {
@@ -137,6 +161,13 @@ final class Config
             'interruptionTypes' => $interruptionTypes,
             'defaultMeetingType' => $defaultMeetingType,
             'defaultMeetingIssue' => $defaultMeetingIssue,
+            'defaultMailType' => $defaultMailType,
+            'defaultMailIssue' => $defaultMailIssue,
+            'defaultReviewType' => $defaultReviewType,
+            'defaultTestType' => $defaultTestType,
+            'defaultImplementType' => $defaultImplementType,
+            'defaultAnalyseType' => $defaultAnalyseType,
+            'defaultDesignType' => $defaultDesignType,
             'defaultOutOfOfficeType' => $defaultOutOfOfficeType,
             'defaultOutOfOfficeIssue' => $defaultOutOfOfficeIssue,
             'editor' => $editor,

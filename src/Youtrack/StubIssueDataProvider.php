@@ -21,6 +21,8 @@ final class StubIssueDataProvider implements IssueDataProvider
 
     public function refresh(): void {}
 
+    public function ensureIssue(string $issueId): void {}
+
     /** @return array<string, string> */
     public function titles(): array
     {

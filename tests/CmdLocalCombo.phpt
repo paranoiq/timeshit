@@ -150,7 +150,8 @@ $app->run(['ts', 'note', 'forgot', 'to', 'note']);
 $items = $store->load();
 Assert::count(1, $items);
 Assert::same('forgot to note', $items[0]->note);
-Assert::contains('Note on ABC-1', $io->getErr());
+Assert::contains('Note on', $io->getErr());
+Assert::contains('ABC-1', $io->getErr());
 Assert::contains('(last closed)', $io->getErr());
 
 
@@ -212,6 +213,7 @@ Assert::contains(
     $items[0]->log,
 );
 $err = $io->getErr();
-Assert::contains('Tracking ABC-1', $err);
-Assert::contains('Stopped ABC-1', $err);
+Assert::contains('Tracking', $err);
+Assert::contains('Stopped', $err);
+Assert::contains('ABC-1', $err);
 Assert::contains('Saved.', $err);

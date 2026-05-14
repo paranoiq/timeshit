@@ -16,6 +16,16 @@ interface IssueDataProvider
     public function refresh(): void;
 
     /**
+     * Ensures that `$issueId` (a YouTrack-format readable id like `SW-1234`)
+     * is represented in the issue cache. If the issue is not already cached,
+     * it is fetched from YouTrack and added; the id is also recorded in a
+     * separate `extraIds` list so it survives the next `refresh`. Offline
+     * failures are swallowed — the id is still recorded so the next refresh
+     * can pick it up.
+     */
+    public function ensureIssue(string $issueId): void;
+
+    /**
      * Returns a `issueId => title` map from the issue cache, or an empty map
      * when no cache exists yet. Never fetches.
      *

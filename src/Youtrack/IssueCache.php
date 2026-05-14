@@ -39,7 +39,7 @@ final class IssueCache
         return $mtime + self::TTL_SECONDS > time();
     }
 
-    /** @return array{user: string, issues: list<Issue>} */
+    /** @return array{user: string, issues: list<Issue>, extraIds: list<string>} */
     public function load(): array
     {
         return FileLock::shared($this->path, function (): array {
@@ -66,19 +66,35 @@ final class IssueCache
                 }
                 $issues[] = Issue::fromArray($item);
             }
+            $extraIds = [];
+            $extraRaw = $decoded['extraIds'] ?? null;
+            if (is_array($extraRaw)) {
+                foreach ($extraRaw as $item) {
+                    if (is_string($item) && $item !== '') {
+                        $extraIds[] = $item;
+                    }
+                }
+            }
 
-            return ['user' => $user, 'issues' => $issues];
+            return ['user' => $user, 'issues' => $issues, 'extraIds' => $extraIds];
         });
     }
 
-    /** @param list<Issue> $issues */
-    public function save(string $user, array $issues): void
+    /**
+     * @param list<Issue> $issues
+     * @param list<string> $extraIds ids referenced by commands that didn't show up
+     *                               in me-queries — kept so refresh re-fetches them
+     */
+    public function save(string $user, array $issues, array $extraIds = []): void
     {
-        FileLock::exclusive($this->path, function () use ($user, $issues): void {
+        FileLock::exclusive($this->path, function () use ($user, $issues, $extraIds): void {
             $payload = [
                 'user' => $user,
                 'issues' => array_map(static fn(Issue $i): array => (array) $i, $issues),
             ];
+            if ($extraIds !== []) {
+                $payload['extraIds'] = $extraIds;
+            }
             $neon = Neon::encode($payload, Neon::BLOCK);
             if (file_put_contents($this->path, $neon) === false) {
                 throw new RuntimeException("Failed to write cache: {$this->path}");
