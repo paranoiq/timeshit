@@ -189,3 +189,47 @@ $archived = $store->loadArchive();
 Assert::count(1, $archived);
 Assert::same('SW-OK', $archived[0]->issueId);
 Assert::same('wi-42', $archived[0]->workItemId);
+
+// 18. untracked break records on a successfully synced day are archived too
+$work = new Record(id: 1, issueId: 'SW-1100', type: 'Implementation', startedAt: '2026-05-10 09:00', endedAt: '2026-05-10 11:00', log: '');
+$brk  = new Record(id: 2, issueId: '', type: '', startedAt: '2026-05-10 11:00', endedAt: '2026-05-10 11:30', log: '', status: 'untracked');
+[$app, $store, , , $pusher] = newApp('2026-05-11 10:00', [$work, $brk]);
+$app->run(['ts', 'push']);
+Assert::same([], $store->load());
+$archived = $store->loadArchive();
+Assert::count(2, $archived);
+// First archived: the synced work item; second: the untracked break (still status='untracked')
+$byId = [];
+foreach ($archived as $a) {
+    $byId[$a->id] = $a;
+}
+Assert::same('synced', $byId[1]->status);
+Assert::same('untracked', $byId[2]->status);
+Assert::contains('archived at 2026-05-11 10:00 (push)', $byId[2]->log);
+
+// 19. untracked records on a day where every group failed stay in records.neon
+$fail = new Record(id: 1, issueId: 'SW-NOPE', type: 'Implementation', startedAt: '2026-05-10 09:00', endedAt: '2026-05-10 10:00', log: '');
+$brk  = new Record(id: 2, issueId: '', type: '', startedAt: '2026-05-10 10:00', endedAt: '2026-05-10 10:30', log: '', status: 'untracked');
+[$app, $store, , , $pusher] = newApp('2026-05-11 10:00', [$fail, $brk]);
+$pusher->setResults([new RuntimeException('boom')]);
+$app->run(['ts', 'push']);
+Assert::same([], $store->loadArchive());
+$remaining = $store->load();
+Assert::count(2, $remaining);
+
+// 20. untracked records are only archived for the specific day(s) that synced
+$workMon = new Record(id: 1, issueId: 'SW-1200', type: 'Implementation', startedAt: '2026-05-08 09:00', endedAt: '2026-05-08 10:00', log: '');
+$brkMon  = new Record(id: 2, issueId: '', type: '', startedAt: '2026-05-08 10:00', endedAt: '2026-05-08 10:15', log: '', status: 'untracked');
+$failTue = new Record(id: 3, issueId: 'SW-NOPE', type: 'Implementation', startedAt: '2026-05-09 09:00', endedAt: '2026-05-09 10:00', log: '');
+$brkTue  = new Record(id: 4, issueId: '', type: '', startedAt: '2026-05-09 10:00', endedAt: '2026-05-09 10:15', log: '', status: 'untracked');
+[$app, $store, , , $pusher] = newApp('2026-05-11 10:00', [$workMon, $brkMon, $failTue, $brkTue]);
+$pusher->setResults(['wi-mon', new RuntimeException('boom')]);
+$app->run(['ts', 'push']);
+$remaining = $store->load();
+Assert::count(2, $remaining);
+$remainingIds = array_map(fn(Record $r) => $r->id, $remaining);
+sort($remainingIds);
+Assert::same([3, 4], $remainingIds);
+$archivedIds = array_map(fn(Record $r) => $r->id, $store->loadArchive());
+sort($archivedIds);
+Assert::same([1, 2], $archivedIds);

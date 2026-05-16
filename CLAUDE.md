@@ -51,7 +51,7 @@ src/                    flat under `Timeshit\` by default; sub-namespaces for or
     IssueDataProvider.php, CachedIssueDataProvider.php, StubIssueDataProvider.php
     WorkItemPusher.php, HttpWorkItemPusher.php, StubWorkItemPusher.php   `push` → `POST /api/issues/{id}/timeTracking/workItems`
   View/                 terminal renderers
-    IssuesView.php, WorkView.php, RecordsView.php, AllView.php
+    IssuesView.php, RecordsView.php, AllView.php
     Workdays.php        `Workdays::expand()` — Mon–Fri fill for the day rollup views
 hooks/
   post-checkout         calls `ts checkout <branch> <repo>` on every branch checkout
@@ -70,8 +70,8 @@ Entry script `timeshit.php` is a thin bootstrap: requires `vendor/autoload.php`,
 
 Subcommands (read `App.php` for argument shapes, error cases, and log-entry wording):
 
-- **Read-only:** `status`, `issues`, `remote`, `local`, `all`, `types`, `refresh`
-- **Sync:** `push [<date>]` — sum closed records by (day, issue, type) up to `<date>` (default: `yesterday`, accepts `today` to include today) and POST a work item per group; on success the records move to `data/archive.neon` with the assigned `workItemId` and `status='synced'`; on failure they stay in `data/records.neon` with `status='failed'` and a `sync failed (…)` log entry. Open records and `untracked` / already-`synced` records are skipped. `failed` records are retried on the next `push`.
+- **Read-only:** `status`, `issues`, `time`, `archive`, `types`, `refresh`
+- **Sync:** `push [<date>]` — sum closed records by (day, issue, type) up to `<date>` (default: `yesterday`, accepts `today` to include today) and POST a work item per group; on success the records move to `data/archive.neon` with the assigned `workItemId` and `status='synced'`; on failure they stay in `data/records.neon` with `status='failed'` and a `sync failed (…)` log entry. Open records and already-`synced` records are skipped. `untracked` break records are not pushed themselves, but once any group on the same day pushes successfully they're moved to `data/archive.neon` too (status preserved, log gets `archived at <time> (push)`) so completed days drop out of `data/records.neon` entirely. `failed` records are retried on the next `push`.
 - **Track:** `track <issue> [<type>]`, `checkout <branch> <repo>` (git hook), `interrupt <issue> [<type>]`
 - **Annotate / mutate the open record:** `type [#<id>] <type>`, `switch <type>`, `note [#<id>] <text>`
 - **Pause / resume / close:** `pause [<note>]`, `resume [<note>]`, `end [<note>]`, `done [<note>]`
@@ -168,7 +168,7 @@ Or globally: `git config --global core.hooksPath /home/vlasta/dev/php/timeshit/h
 
 `RecordStore` mutators that append to the `log` (`changeOpenType`, `noteLast`, `track`, `endOpen`, `archive`, `markFailed`) take both the timestamp and the trigger (command name) as parameters — `App` passes `$this->clock->nowMinute()` and the matching command name. The store has no hidden `date()` calls. `track` and `endOpen` also take `bool $pauseClosed = false`.
 
-`archive(list<int> $ids, $workItemId, $time, $trigger)` removes the named records from `data/records.neon`, applies `Record::markSynced(...)` (sets `status='synced'`, fills `workItemId`, appends `synced as <id> at <time> (push)` to the log), and writes them to `data/archive.neon`. `markFailed(list<int> $ids, $reason, $time, $trigger)` updates the named records in place with `Record::markFailed(...)` (`status='failed'` + `sync failed (<reason>) at <time> (push)` log entry). Both run inside the same lock as `records.neon`. `FileRecordStore::__construct($recordsPath, $archivePath)` takes both paths.
+`archive(list<int> $ids, $workItemId, $time, $trigger)` removes the named records from `data/records.neon`, applies `Record::markSynced(...)` (sets `status='synced'`, fills `workItemId`, appends `synced as <id> at <time> (push)` to the log), and writes them to `data/archive.neon`. `markFailed(list<int> $ids, $reason, $time, $trigger)` updates the named records in place with `Record::markFailed(...)` (`status='failed'` + `sync failed (<reason>) at <time> (push)` log entry). `archiveUntracked(list<int> $ids, $time, $trigger)` moves the named records to `data/archive.neon` with a `archived at <time> (<trigger>)` log entry and the existing status preserved (no `markSynced` — there's no work item); `cmdPush` calls it for `untracked` break records on every day where at least one group pushed successfully. All three run inside the same lock as `records.neon`. `FileRecordStore::__construct($recordsPath, $archivePath)` takes both paths.
 
 ## Conventions
 
@@ -219,8 +219,8 @@ Test files (read the file for the scenario list):
 
 ## Status
 
-- **YouTrack:** read-only listing — `issues`, `remote`, `refresh` with 24h NEON caches at `data/issues.neon`, `data/work-items.neon`, `data/work-item-types.neon`. Write: `push` creates work items via `POST /api/issues/{id}/timeTracking/workItems`; archived synced records live in `data/archive.neon`.
-- **CLI:** branch-switch tracking via `checkout` and manual switching via `track` both write to `data/records.neon`. `local` / `all` views available. After-the-fact editing via `at` / `before` / `after` / `edit` is wired up. `push` syncs closed records to YouTrack.
+- **YouTrack:** read-only listing — `issues`, `refresh` with 24h NEON caches at `data/issues.neon`, `data/work-items.neon`, `data/work-item-types.neon`. Write: `push` creates work items via `POST /api/issues/{id}/timeTracking/workItems`; archived synced records live in `data/archive.neon`.
+- **CLI:** branch-switch tracking via `checkout` and manual switching via `track` both write to `data/records.neon`. `time` (YouTrack + local rollup) / `archive` (pushed records) views available. After-the-fact editing via `at` / `before` / `after` / `edit` is wired up. `push` syncs closed records to YouTrack.
 - **Local server:** not started.
 - **GitLab integration:** not started.
 - **Browser plugin / favelet:** not started.

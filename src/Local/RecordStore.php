@@ -96,6 +96,18 @@ interface RecordStore
      */
     public function markFailed(array $ids, string $reason, string $time, string $trigger): array;
 
+    /**
+     * Removes the records with the given ids from the active store and appends
+     * them to the archive with a `archived at <time> (<trigger>)` log entry
+     * and their existing status preserved (no `markSynced` — there is no
+     * work item). Used to evict `untracked` break records once the rest of
+     * their day has been pushed. Records not present are silently ignored.
+     *
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function archiveUntracked(array $ids, string $time, string $trigger): array;
+
     /** @return list<Record> */
     public function loadArchive(): array;
 }

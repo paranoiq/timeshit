@@ -10,7 +10,11 @@ use function is_string;
 
 final class Issue
 {
-    /** @param list<string> $roles */
+    /**
+     * @param list<string> $roles
+     * @param list<string> $tags
+     * @param list<string> $customers
+     */
     public function __construct(
         public readonly string $id,
         public readonly string $title,
@@ -22,6 +26,12 @@ final class Issue
         public readonly int $spent,
         public readonly array $roles,
         public readonly string $description = '',
+        public readonly array $tags = [],
+        public readonly int $created = 0,
+        public readonly int $updated = 0,
+        public readonly ?int $resolved = null,
+        public readonly array $customers = [],
+        public readonly int $estimation = 0,
     ) {}
 
     /** @param array<int|string, mixed> $data */
@@ -38,6 +48,12 @@ final class Issue
             spent: self::int($data, 'spent'),
             roles: self::strList($data, 'roles'),
             description: self::strOpt($data, 'description'),
+            tags: self::strListOpt($data, 'tags'),
+            created: self::intOpt($data, 'created'),
+            updated: self::intOpt($data, 'updated'),
+            resolved: self::intOrNull($data, 'resolved'),
+            customers: self::strListOpt($data, 'customers'),
+            estimation: self::intOpt($data, 'estimation'),
         );
     }
 
@@ -90,5 +106,41 @@ final class Issue
         $value = $data[$key] ?? null;
 
         return is_string($value) ? $value : '';
+    }
+
+    /** @param array<int|string, mixed> $data */
+    private static function intOpt(array $data, string $key): int
+    {
+        $value = $data[$key] ?? null;
+
+        return is_int($value) ? $value : 0;
+    }
+
+    /** @param array<int|string, mixed> $data */
+    private static function intOrNull(array $data, string $key): ?int
+    {
+        $value = $data[$key] ?? null;
+
+        return is_int($value) ? $value : null;
+    }
+
+    /**
+     * @param array<int|string, mixed> $data
+     * @return list<string>
+     */
+    private static function strListOpt(array $data, string $key): array
+    {
+        $value = $data[$key] ?? null;
+        if (!is_array($value)) {
+            return [];
+        }
+        $result = [];
+        foreach ($value as $item) {
+            if (is_string($item)) {
+                $result[] = $item;
+            }
+        }
+
+        return $result;
     }
 }

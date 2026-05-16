@@ -8,8 +8,11 @@ use Timeshit\Local\Record;
 use Timeshit\Util\Ansi;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\WorkItem;
+use function implode;
 use function intdiv;
 use function max;
+use function mb_strimwidth;
+use function mb_strwidth;
 use function printf;
 use function rtrim;
 use function sprintf;
@@ -34,7 +37,7 @@ final class IssuesView
         $baseUrl = rtrim($this->baseUrl, '/');
         $currentUser = $this->currentUser;
         $mineActive = static function (Issue $issue) use ($currentUser): bool {
-            return $issue->assignee === $currentUser && Format::statePriority($issue->state) !== 7;
+            return $issue->assignee === $currentUser && Format::statePriority($issue->state) !== 8;
         };
         usort(
             $issues,
@@ -75,22 +78,24 @@ final class IssuesView
             . '  m' . Ansi::lblack('=mentioned')
             . "\n\n";
 
-        $format = "%-8s %-8s %-11s %-12s %-8s %-17s %-11s %-11s %s\n";
+        $format = "%-8s %-8s %-8s %-12s %-8s %-14s %-11s %-11s %-7s %-60s %s\n";
         $printRule = static function () use ($format): void {
             printf(
                 $format,
                 str_repeat('-', 8),
                 str_repeat('-', 8),
-                str_repeat('-', 11),
+                str_repeat('-', 8),
                 str_repeat('-', 12),
                 str_repeat('-', 8),
-                str_repeat('-', 17),
+                str_repeat('-', 14),
                 str_repeat('-', 11),
                 str_repeat('-', 11),
+                str_repeat('-', 7),
                 str_repeat('-', 60),
+                str_repeat('-', 44),
             );
         };
-        printf($format, 'ID', 'TYPE', 'CAT.', 'STATE', 'ROLES', 'ASSIGNEE', '   SPENT', '    ALL', 'TITLE');
+        printf($format, 'ID', 'TYPE', 'CAT.', 'STATE', 'ROLES', 'ASSIGNEE', '   SPENT', '    ALL', '  EST  ', 'TITLE', 'LINK');
         $printRule();
         $lastWasMine = false;
         $lastWasFinished = false;
@@ -99,7 +104,7 @@ final class IssuesView
         $first = true;
         foreach ($issues as $issue) {
             $isMine = $mineActive($issue);
-            $isFinished = Format::statePriority($issue->state) === 7;
+            $isFinished = Format::statePriority($issue->state) === 8;
             $needRule = false;
             if (!$first && $lastWasMine && !$isMine && !$afterMinePrinted) {
                 $needRule = true;
@@ -117,6 +122,21 @@ final class IssuesView
             $lastWasFinished = $isFinished;
             $url = $baseUrl . '/issue/' . $issue->id;
             $mine = $mineByIssue[$issue->id] ?? 0;
+            $custText = $issue->customers !== []
+                ? '(' . implode(', ', $issue->customers) . ')'
+                : '';
+            $custWidth = $custText === '' ? 0 : 1 + mb_strwidth($custText);
+            $titleBudget = max(0, 60 - $custWidth);
+            $titleTrimmed = mb_strwidth($issue->title) > $titleBudget
+                ? mb_strimwidth($issue->title, 0, $titleBudget, '…')
+                : $issue->title;
+            $title = Ansi::link($url, $titleTrimmed);
+            $visibleLen = mb_strwidth($titleTrimmed);
+            if ($custText !== '') {
+                $title .= ' ' . Ansi::lblack($custText);
+                $visibleLen += $custWidth;
+            }
+            $title .= str_repeat(' ', max(0, 60 - $visibleLen));
             printf(
                 $format,
                 Ansi::link($url, sprintf('%-8s', $issue->id)),
@@ -127,7 +147,9 @@ final class IssuesView
                 Format::assignee($issue->assignee, $this->currentUser),
                 Format::spent($mine, Ansi::lgreen(...)),
                 Format::spent($issue->spent),
-                Ansi::link($url, $issue->title),
+                Format::estimation($issue->estimation),
+                $title,
+                Ansi::lblack(Ansi::link($url, $url)),
             );
         }
     }

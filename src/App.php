@@ -2,6 +2,7 @@
 
 namespace Timeshit;
 
+use Closure;
 use Collator;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -19,7 +20,6 @@ use Timeshit\Util\SystemClock;
 use Timeshit\View\AllView;
 use Timeshit\View\IssuesView;
 use Timeshit\View\RecordsView;
-use Timeshit\View\WorkView;
 use Timeshit\Youtrack\CachedIssueDataProvider;
 use Timeshit\Youtrack\CachedTypeProvider;
 use Timeshit\Youtrack\HttpWorkItemPusher;
@@ -130,7 +130,7 @@ final class App
     }
 
     private const COMMAND_NAMES = [
-        'status', 'issues', 'remote', 'local', 'all', //'types',
+        'status', 'issues', 'time', 'archive', //'types',
         'track', 'interrupt', 'meeting', 'mail', 'review', 'test', 'implement', 'analyse', 'design', 'day', 'vacation', 'type', 'switch',
         'pause', 'resume', 'continue', 'skip', 'grab', 'put', 'end', 'done',
         'at', 'before', 'after', 'note', 'edit', 'delete',
@@ -170,9 +170,8 @@ final class App
             match ($resolved) {
                 'help' => self::printHelp($this->io, $this->config),
                 'issues' => $this->cmdIssues(Resolver::restArgs($argv)),
-                'remote' => $this->cmdRemote(),
-                'local' => $this->cmdLocal($argv[2] ?? null),
-                'all' => $this->cmdAll($argv[2] ?? null),
+                'time' => $this->cmdTime($argv[2] ?? null),
+                'archive' => $this->cmdArchive($argv[2] ?? null),
                 'status' => $this->cmdStatus(),
                 'refresh' => $this->cmdRefresh(),
                 'track' => $this->cmdTrack($argv[2] ?? null, $argv[3] ?? null),
@@ -307,9 +306,8 @@ final class App
             'Info' => [
                 [$cmd('status'),   '', 'Show current status (active entry, previous, tracked time)'],
                 [$cmd('issues'),   $opt('search'), 'List ' . $app('YouTrack') . ' issues you are involved in (cached for 24h)'],
-                [$cmd('remote'),   '', 'List time entries already on ' . $app('YouTrack') . ' (cached for 24h)'],
-                [$cmd('local'),    Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List locally tracked entries grouped by day/issue/type (not grouped with '. $flag('details') . ')'],
-                [$cmd('all'),      Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List time entries from both ' . $cmd('remote') . ' and ' . $cmd('local')],
+                [$cmd('time'),     Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List time entries from ' . $app('YouTrack') . ' and locally tracked records, grouped by day/issue/type (not grouped with ' . $flag('details') . ')'],
+                [$cmd('archive'),  Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List archived (already pushed) locally tracked entries'],
                 //[$cmd('types'),    '', 'List the ' . $app('YouTrack') . ' work-item types (cached for 24h)'],
             ],
             'Actions' => [
@@ -348,22 +346,21 @@ final class App
             ],
             'Triggers' => [
                 [$cmd('checkout'), $req('branch') . ' ' . $req('repo'), 'Switch tracking on ' . $app('git checkout') . ' (called from ' . $app('hooks/post-checkout') . ')'],
-                [$cmd('server'),   $req('action'), 'Start or stop the local timeshit server (auto-started by ' . Ansi::lblue('timeshit.php') . ' unless stopped)'],
+                [$cmd('server'),   $val('start') . Ansi::lblack('|') . $val('stop'), 'Start or stop the local timeshit server (auto-started by ' . Ansi::lblue('timeshit.php') . ' unless stopped)'],
             ],
         ];
 
         $argRows = [
             [$req('issue'),  $app('YouTrack') . ' issue id, e.g. ' . $val('SW-1234') . ' or just ' . $val('1234') . ' or free text for not yet created issues'],
-            [$req('id'),     'numeric entry id (the ' . Ansi::lblack('#n') . ' column shown by ' . $cmd('local') . ' / ' . $cmd('status') . ')'],
+            [$req('id'),     'numeric entry id (the ' . Ansi::lblack('#n') . ' column shown by ' . $cmd('time') . ' / ' . $cmd('status') . ')'],
             [$req('type'),   'work-item type; see ' . Ansi::lgreen(Ansi::underline('types')) . ' for the allowed list. Default is ' . $val('defaultTrackType') . ' from config'],
             [$req('note'),   'free-form text; appended to the entrie\'s existing note'],
             [$req('span'),   'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m') . ')'],
             [$req('time'),   $val('HH:MM') . ' or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
             [$req('date'),   'expressions like ' . $val('yesterday') . ' / ' . $val('yes') . ' / ' . $val('y') . ', day-of-month (e.g. ' . $val('15') . ') or full date. Default: ' . $val('today')],
-            [$req('branch'), 'git branch name (used to extract the issue id; passed by git hook)'],
-            [$req('repo'),   'repository name (passed by git hook)'],
-            [$req('search'), 'case-insensitive substring matched against issue title and description'],
-            [$req('action'), $val('start') . ' or ' . $val('stop')],
+            //[$req('branch'), 'git branch name (used to extract the issue id; passed by git hook)'],
+            //[$req('repo'),   'repository name (passed by git hook)'],
+            //[$req('search'), 'case-insensitive substring matched against issue title and description'],
         ];
 
         $nameWidth = 0;
@@ -407,31 +404,26 @@ final class App
                 $issues,
                 static fn(Issue $i): bool => str_contains(mb_strtolower($i->id), $needle)
                     || str_contains(mb_strtolower($i->title), $needle)
-                    || str_contains(mb_strtolower($i->description), $needle),
+                    || str_contains(mb_strtolower($i->description), $needle)
+                    || str_contains(mb_strtolower($i->assignee), $needle)
+                    || str_contains(mb_strtolower(implode(' ', $i->customers)), $needle),
             ));
         }
         (new IssuesView($this->config->youtrackBaseUrl, $data['user']))->render($issues, $data['workItems'], $this->store->load());
     }
 
-    private function cmdRemote(): void
+    private function cmdTime(?string $modifier): void
     {
-        $data = $this->issueData->loadOrFetch();
-        (new WorkView($this->config->youtrackBaseUrl))->render($data['workItems'], $data['issues']);
-    }
-
-    private function cmdLocal(?string $modifier): void
-    {
-        $details = self::resolveDetailsFlag('local', $modifier);
-        $items = array_merge($this->store->loadArchive(), $this->store->load());
-        (new RecordsView($this->config->youtrackBaseUrl))->render($items, $this->issueData->titles(), $details);
-    }
-
-    private function cmdAll(?string $modifier): void
-    {
-        $details = self::resolveDetailsFlag('all', $modifier);
+        $details = self::resolveDetailsFlag('time', $modifier);
         $data = $this->issueData->loadOrFetch();
         $records = $this->store->load();
         (new AllView($this->config->youtrackBaseUrl))->render($data['workItems'], $records, $data['issues'], $details);
+    }
+
+    private function cmdArchive(?string $modifier): void
+    {
+        $details = self::resolveDetailsFlag('archive', $modifier);
+        (new RecordsView($this->config->youtrackBaseUrl))->render($this->store->loadArchive(), $this->issueData->titles(), $details);
     }
 
     private static function resolveDetailsFlag(string $cmd, ?string $modifier): bool
@@ -469,13 +461,16 @@ final class App
             $this->io->out("No tracking entries.\n");
         } else {
             $today = $this->clock->now()->format('Y-m-d');
+            $weekStart = $this->clock->now()->modify('monday this week')->format('Y-m-d');
             $now = $this->clock->nowMinute();
             $todayMinutes = 0;
-            foreach ($items as $r) {
-                if (substr($r->startedAt, 0, 10) !== $today) {
+            $weekMinutes = 0;
+            foreach (array_merge($this->store->loadArchive(), $items) as $r) {
+                if ($r->status === 'untracked' || $r->status === 'day') {
                     continue;
                 }
-                if ($r->status === 'untracked' || $r->status === 'day') {
+                $day = substr($r->startedAt, 0, 10);
+                if ($day < $weekStart) {
                     continue;
                 }
                 $end = $r->endedAt ?? $now;
@@ -485,7 +480,11 @@ final class App
                 } catch (Exception) {
                     continue;
                 }
-                $todayMinutes += max(0, intdiv($e->getTimestamp() - $s->getTimestamp(), 60));
+                $minutes = max(0, intdiv($e->getTimestamp() - $s->getTimestamp(), 60));
+                $weekMinutes += $minutes;
+                if ($day === $today) {
+                    $todayMinutes += $minutes;
+                }
             }
             $isWeekend = (int) $this->clock->now()->format('N') >= 6;
             $todayColor = match (true) {
@@ -493,7 +492,9 @@ final class App
                 $todayMinutes >= 8 * 60 => Ansi::lgreen(...),
                 default => Ansi::red(...),
             };
-            $this->io->out(Ansi::lwhite('Today') . ": " . Format::spent($todayMinutes, $todayColor, false) . "\n\n");
+            $weekColor = $weekMinutes >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
+            $this->io->out(Ansi::lwhite('Today') . ": " . Format::spent($todayMinutes, $todayColor, false) . "\n");
+            $this->io->out(Ansi::lwhite('Week') . ":  " . Format::spent($weekMinutes, $weekColor, false) . "\n\n");
 
             $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
             $titleByIssueId = $this->issueData->titles();
@@ -697,6 +698,49 @@ final class App
         return $line;
     }
 
+    /** @param list<Record> $items */
+    private static function findRecordIndex(array $items, int $id): ?int
+    {
+        foreach ($items as $i => $r) {
+            if ($r->id === $id) {
+                return $i;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Within a `RecordStore` transaction, find the record with the given id, reject `day` entries, and
+     * apply `$modifier` to it. The modifier returns the replacement `Record` (saved in place) or `null`
+     * (no-op). Returns `[$previous, $updated]` on change, or `null` if the modifier opted out.
+     *
+     * @param Closure(Record): ?Record $modifier
+     * @return ?array{0: Record, 1: Record}
+     */
+    private function modifyRecordById(string $cmd, int $id, Closure $modifier): ?array
+    {
+        return $this->store->transaction(function () use ($cmd, $id, $modifier): ?array {
+            $items = $this->store->load();
+            $index = self::findRecordIndex($items, $id);
+            if ($index === null) {
+                throw new RuntimeException("{$cmd}: entry #{$id} not found");
+            }
+            $current = $items[$index];
+            if ($current->status === 'day') {
+                throw new RuntimeException("{$cmd}: refusing to edit day entry #{$id}");
+            }
+            $updated = $modifier($current);
+            if ($updated === null) {
+                return null;
+            }
+            $items[$index] = $updated;
+            $this->store->save(array_values($items));
+
+            return [$current, $updated];
+        });
+    }
+
     private function cmdTypes(): void
     {
         $types = $this->types->types();
@@ -746,37 +790,21 @@ final class App
 
             return;
         }
-        $this->store->transaction(function () use ($id, $matched): void {
-            $items = $this->store->load();
-            $index = null;
-            foreach ($items as $i => $r) {
-                if ($r->id === $id) {
-                    $index = $i;
-                    break;
-                }
-            }
-            if ($index === null) {
-                throw new RuntimeException("type: entry #{$id} not found");
-            }
-            $current = $items[$index];
-            if ($current->status === 'day') {
-                throw new RuntimeException("type: refusing to edit day entry #{$id}");
-            }
-            if ($current->type === $matched) {
-                return;
-            }
-            $previous = $current->type;
-            $updated = $current->withType($matched, $this->clock->nowMinute(), 'type');
-            $items[$index] = $updated;
-            $this->store->save(array_values($items));
+        $result = $this->modifyRecordById('type', $id, function (Record $current) use ($matched): ?Record {
+            return $current->type === $matched
+                ? null
+                : $current->withType($matched, $this->clock->nowMinute(), 'type');
+        });
+        if ($result !== null) {
+            [$previous, $updated] = $result;
             $this->io->err(sprintf(
                 "Changed type of %s %s from %s to %s\n",
                 $updated->issueId,
                 Format::recordId($updated->id),
-                $previous,
+                $previous->type,
                 $matched,
             ));
-        });
+        }
     }
 
     private function cmdSwitch(?string $newType): void
@@ -823,15 +851,7 @@ final class App
         if ($item === null) {
             throw new RuntimeException('end: no open tracking entry');
         }
-        $endedAt = $item->endedAt ?? '';
-        $this->io->err(sprintf(
-            "Stopped %s after %s\n",
-            $this->actionRef($item->issueId, $item->id),
-            Format::durationInline($item->startedAt, $endedAt),
-        ));
-        if ($item->note !== '') {
-            $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $item->note . '"')));
-        }
+        $this->announceStopped($item);
     }
 
     private function cmdDone(?string $note): void
@@ -843,15 +863,7 @@ final class App
             if ($item === null) {
                 throw new RuntimeException('done: no open tracking entry');
             }
-            $endedAt = $item->endedAt ?? '';
-            $this->io->err(sprintf(
-                "Stopped %s after %s\n",
-                $this->actionRef($item->issueId, $item->id),
-                Format::durationInline($item->startedAt, $endedAt),
-            ));
-            if ($item->note !== '') {
-                $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $item->note . '"')));
-            }
+            $this->announceStopped($item);
 
             $items = $this->store->load();
             $target = null;
@@ -861,21 +873,38 @@ final class App
                     break;
                 }
             }
-            if ($target === null) {
-                return;
+            if ($target !== null) {
+                $this->resumeFrom($target, 'done');
             }
-            $now = $this->clock->nowMinute();
-            $next = new Record(
-                id: $this->store->nextId(),
-                issueId: $target->issueId,
-                type: $target->type,
-                startedAt: $now,
-                endedAt: null,
-                log: Record::logCreated($now, 'done'),
-            );
-            $this->store->track($next, 'done');
-            $this->io->err(sprintf("Resumed %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($next->type)));
         });
+    }
+
+    private function announceStopped(Record $item): void
+    {
+        $endedAt = $item->endedAt ?? '';
+        $this->io->err(sprintf(
+            "Stopped %s after %s\n",
+            $this->actionRef($item->issueId, $item->id),
+            Format::durationInline($item->startedAt, $endedAt),
+        ));
+        if ($item->note !== '') {
+            $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $item->note . '"')));
+        }
+    }
+
+    private function resumeFrom(Record $target, string $trigger): void
+    {
+        $now = $this->clock->nowMinute();
+        $next = new Record(
+            id: $this->store->nextId(),
+            issueId: $target->issueId,
+            type: $target->type,
+            startedAt: $now,
+            endedAt: null,
+            log: Record::logCreated($now, $trigger),
+        );
+        $this->store->track($next, $trigger);
+        $this->io->err(sprintf("Resumed %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($next->type)));
     }
 
     private function cmdPause(?string $note): void
@@ -947,17 +976,7 @@ final class App
             if ($target === null) {
                 throw new RuntimeException('resume: no entry to resume');
             }
-            $now = $this->clock->nowMinute();
-            $next = new Record(
-                id: $this->store->nextId(),
-                issueId: $target->issueId,
-                type: $target->type,
-                startedAt: $now,
-                endedAt: null,
-                log: Record::logCreated($now, 'resume'),
-            );
-            $this->store->track($next, 'resume');
-            $this->io->err(sprintf("Resumed %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($next->type)));
+            $this->resumeFrom($target, 'resume');
         });
     }
 
@@ -1123,32 +1142,18 @@ final class App
 
             return;
         }
-        $this->store->transaction(function () use ($id, $note): void {
-            $items = $this->store->load();
-            $index = null;
-            foreach ($items as $i => $r) {
-                if ($r->id === $id) {
-                    $index = $i;
-                    break;
-                }
-            }
-            if ($index === null) {
-                throw new RuntimeException("note: entry #{$id} not found");
-            }
-            $current = $items[$index];
-            if ($current->status === 'day') {
-                throw new RuntimeException("note: refusing to edit day entry #{$id}");
-            }
+        $result = $this->modifyRecordById('note', $id, function (Record $current) use ($note): ?Record {
             $merged = $current->note === '' ? $note : $current->note . ' | ' . $note;
-            if ($merged === $current->note) {
-                return;
-            }
-            $updated = $current->withNote($merged, $this->clock->nowMinute(), 'note');
-            $items[$index] = $updated;
-            $this->store->save(array_values($items));
+
+            return $merged === $current->note
+                ? null
+                : $current->withNote($merged, $this->clock->nowMinute(), 'note');
+        });
+        if ($result !== null) {
+            [, $updated] = $result;
             $where = $updated->isOpen() ? 'active' : 'closed';
             $this->io->err(sprintf("Note on %s (%s): %s\n", $this->actionRef($updated->issueId, $updated->id), $where, Ansi::lblack('"' . $updated->note . '"')));
-        });
+        }
     }
 
     private function cmdEdit(?string $idArg): void
@@ -1162,13 +1167,10 @@ final class App
         $id = (int) $idArg;
 
         $target = $this->store->transaction(function () use ($id): ?Record {
-            foreach ($this->store->load() as $r) {
-                if ($r->id === $id) {
-                    return $r;
-                }
-            }
+            $items = $this->store->load();
+            $index = self::findRecordIndex($items, $id);
 
-            return null;
+            return $index === null ? null : $items[$index];
         });
         if ($target === null) {
             throw new RuntimeException("edit: entry #{$id} not found");
@@ -1245,13 +1247,7 @@ final class App
 
         $this->store->transaction(function () use ($target, $parsed): void {
             $items = $this->store->load();
-            $index = null;
-            foreach ($items as $i => $r) {
-                if ($r->id === $target->id) {
-                    $index = $i;
-                    break;
-                }
-            }
+            $index = self::findRecordIndex($items, $target->id);
             if ($index === null) {
                 throw new RuntimeException("edit: entry #{$target->id} disappeared during edit");
             }
@@ -1319,13 +1315,7 @@ final class App
 
         $this->store->transaction(function () use ($id): void {
             $items = $this->store->load();
-            $index = null;
-            foreach ($items as $i => $r) {
-                if ($r->id === $id) {
-                    $index = $i;
-                    break;
-                }
-            }
+            $index = self::findRecordIndex($items, $id);
             if ($index === null) {
                 throw new RuntimeException("delete: entry #{$id} not found");
             }
@@ -1672,12 +1662,7 @@ final class App
 
         $targetIndex = null;
         if ($targetId !== null) {
-            foreach ($items as $i => $r) {
-                if ($r->id === $targetId) {
-                    $targetIndex = $i;
-                    break;
-                }
-            }
+            $targetIndex = self::findRecordIndex($items, $targetId);
             if ($targetIndex === null) {
                 throw new RuntimeException("{$cmd}: entry #{$targetId} not found");
             }
@@ -1901,6 +1886,8 @@ final class App
         $succeeded = 0;
         $failed = 0;
         $currentDate = '';
+        /** @var array<string, true> $syncedDays */
+        $syncedDays = [];
 
         foreach ($groups as $g) {
             if ($g['date'] !== $currentDate) {
@@ -1940,6 +1927,22 @@ final class App
             $this->store->archive($g['ids'], $workItemId, $this->clock->nowMinute(), 'push');
             $this->printPushSuccess($g, $workItemId);
             $succeeded++;
+            $syncedDays[$g['date']] = true;
+        }
+
+        if ($syncedDays !== []) {
+            $untrackedIds = [];
+            foreach ($this->store->load() as $r) {
+                if ($r->status !== 'untracked') {
+                    continue;
+                }
+                if (isset($syncedDays[substr($r->startedAt, 0, 10)])) {
+                    $untrackedIds[] = $r->id;
+                }
+            }
+            if ($untrackedIds !== []) {
+                $this->store->archiveUntracked($untrackedIds, $this->clock->nowMinute(), 'push');
+            }
         }
 
         $this->io->err(sprintf("\nPushed: %d, failed: %d (cutoff %s)\n", $succeeded, $failed, $cutoffKey));

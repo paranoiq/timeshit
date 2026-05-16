@@ -112,10 +112,10 @@ final class AllView
         $dates = Workdays::expand(array_keys($rowsByDate));
 
         echo '  ' . Ansi::lblack('Legend: ')
-            . self::statusIndicator('synced') . ' ' . Ansi::lblack('synced  ')
-            . self::statusIndicator('open')   . ' ' . Ansi::lblack('open  ')
-            . self::statusIndicator('local')  . ' ' . Ansi::lblack('local  ')
-            . self::statusIndicator('failed') . ' ' . Ansi::lblack('failed') . "\n";
+            . Format::indicator('synced') . ' ' . Ansi::lblack('synced  ')
+            . Format::indicator('open')   . ' ' . Ansi::lblack('open  ')
+            . Format::indicator('local')  . ' ' . Ansi::lblack('local  ')
+            . Format::indicator('failed') . ' ' . Ansi::lblack('failed') . "\n";
 
         $currentWeek = '';
         foreach ($dates as $date) {
@@ -153,7 +153,7 @@ final class AllView
                     : Format::spent($row['minutes']);
                 echo sprintf(
                     "    %s %s  %s  %s  %s%s%s\n",
-                    self::statusIndicator($row['status']),
+                    Format::indicator($row['status']),
                     Ansi::link($url, sprintf('%-12s', $row['issueId'])),
                     $spent,
                     $type,
@@ -239,10 +239,10 @@ final class AllView
         $dates = Workdays::expand(array_keys($keysByDate));
 
         echo '  ' . Ansi::lblack('Legend: ')
-            . self::statusIndicator('synced') . ' ' . Ansi::lblack('synced  ')
-            . self::statusIndicator('open')   . ' ' . Ansi::lblack('open  ')
-            . self::statusIndicator('local')  . ' ' . Ansi::lblack('local  ')
-            . self::statusIndicator('failed') . ' ' . Ansi::lblack('failed') . "\n";
+            . Format::indicator('synced') . ' ' . Ansi::lblack('synced  ')
+            . Format::indicator('open')   . ' ' . Ansi::lblack('open  ')
+            . Format::indicator('local')  . ' ' . Ansi::lblack('local  ')
+            . Format::indicator('failed') . ' ' . Ansi::lblack('failed') . "\n";
 
         $currentWeek = '';
         foreach ($dates as $date) {
@@ -276,7 +276,7 @@ final class AllView
                 $notesPart = $notes === '' ? '' : ' ' . Ansi::lblack('"' . $notes . '"');
                 echo sprintf(
                     "    %s %s  %s  %s  %s%s%s\n",
-                    self::statusIndicator($g['status']),
+                    Format::indicator($g['status']),
                     Ansi::link($url, sprintf('%-12s', $g['issueId'])),
                     Format::spent($g['minutes']),
                     $type,
@@ -286,17 +286,6 @@ final class AllView
                 );
             }
         }
-    }
-
-    private static function statusIndicator(string $status): string
-    {
-        return match ($status) {
-            'synced' => Ansi::lgreen('●'),
-            'open'   => Ansi::lgreen('▶'),
-            'local'  => Ansi::lyellow('○'),
-            'failed' => Ansi::red('✗'),
-            default  => ' ',
-        };
     }
 
     private static function pad(string $s, int $width): string

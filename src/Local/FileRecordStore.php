@@ -369,6 +369,34 @@ final class FileRecordStore implements RecordStore
         });
     }
 
+    /**
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function archiveUntracked(array $ids, string $time, string $trigger): array
+    {
+        return $this->transaction(function () use ($ids, $time, $trigger): array {
+            $items = $this->load();
+            $idSet = array_flip($ids);
+            $kept = [];
+            $archived = [];
+            foreach ($items as $r) {
+                if (isset($idSet[$r->id])) {
+                    $archived[] = $r->appendLog("archived at {$time} ({$trigger})");
+                } else {
+                    $kept[] = $r;
+                }
+            }
+            if ($archived === []) {
+                return [];
+            }
+            $this->save($kept);
+            $this->appendArchive($archived);
+
+            return $archived;
+        });
+    }
+
     /** @return list<Record> */
     public function loadArchive(): array
     {

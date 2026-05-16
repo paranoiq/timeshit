@@ -253,24 +253,25 @@ final class RecordsView
     private static function recordIndicator(Record $r): string
     {
         if ($r->endedAt === null) {
-            return Ansi::lgreen('▶');
+            return Format::indicator('open');
         }
-        return match ($r->status) {
-            'synced' => Ansi::lblack('▣'),
-            'failed' => Ansi::red('✗'),
-            default  => Ansi::lyellow('○'),
-        };
+
+        return Format::indicator(match ($r->status) {
+            'synced' => 'archived',
+            'failed' => 'failed',
+            default  => 'local',
+        });
     }
 
     /** @param array{allSynced: bool, hasOpen: bool, hasFailed: bool} $g */
     private static function groupIndicator(array $g): string
     {
-        return match (true) {
-            $g['hasFailed'] => Ansi::red('✗'),
-            $g['hasOpen']   => Ansi::lgreen('▶'),
-            $g['allSynced'] => Ansi::lblack('▣'),
-            default         => Ansi::lyellow('○'),
-        };
+        return Format::indicator(match (true) {
+            $g['hasFailed'] => 'failed',
+            $g['hasOpen']   => 'open',
+            $g['allSynced'] => 'archived',
+            default         => 'local',
+        });
     }
 
     private static function pad(string $s, int $width): string

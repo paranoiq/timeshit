@@ -34,8 +34,9 @@ use const CURLOPT_TIMEOUT;
 
 final class YoutrackClient
 {
-    private const ISSUE_FIELDS = 'idReadable,summary,description,'
+    private const ISSUE_FIELDS = 'idReadable,summary,description,created,updated,resolved,'
         . 'project(shortName,name),'
+        . 'tags(name),'
         . 'customFields(name,value(name,login,fullName,minutes,presentation))';
 
     private readonly string $baseUrl;
@@ -316,6 +317,24 @@ final class YoutrackClient
                 ?? '?';
         }
 
+        $tags = [];
+        $tagsRaw = $issue['tags'] ?? null;
+        if (is_array($tagsRaw)) {
+            foreach ($tagsRaw as $tag) {
+                if (!is_array($tag)) {
+                    continue;
+                }
+                $name = self::asString($tag['name'] ?? null);
+                if ($name !== null && $name !== '') {
+                    $tags[] = $name;
+                }
+            }
+        }
+
+        $createdMs = self::asInt($issue['created'] ?? null);
+        $updatedMs = self::asInt($issue['updated'] ?? null);
+        $resolvedMs = self::asInt($issue['resolved'] ?? null);
+
         return new Issue(
             id: $id,
             title: $title,
@@ -327,6 +346,12 @@ final class YoutrackClient
             spent: self::cfMinutes($issue, 'Spent time') ?? 0,
             roles: $roles,
             description: self::asString($issue['description'] ?? null) ?? '',
+            tags: $tags,
+            created: $createdMs === null ? 0 : intdiv($createdMs, 1000),
+            updated: $updatedMs === null ? 0 : intdiv($updatedMs, 1000),
+            resolved: $resolvedMs === null ? null : intdiv($resolvedMs, 1000),
+            customers: self::cfNames($issue, 'Customer'),
+            estimation: self::cfMinutes($issue, 'Estimation') ?? 0,
         );
     }
 
@@ -395,6 +420,30 @@ final class YoutrackClient
         }
 
         return self::asString($value['name'] ?? null);
+    }
+
+    /**
+     * @param array<int|string, mixed> $issue
+     * @return list<string>
+     */
+    private static function cfNames(array $issue, string $field): array
+    {
+        $value = self::customFieldValue($issue, $field);
+        if (!is_array($value)) {
+            return [];
+        }
+        $names = [];
+        foreach ($value as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $name = self::asString($item['name'] ?? null);
+            if ($name !== null && $name !== '') {
+                $names[] = $name;
+            }
+        }
+
+        return $names;
     }
 
     /**

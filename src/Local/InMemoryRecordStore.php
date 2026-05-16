@@ -233,6 +233,31 @@ final class InMemoryRecordStore implements RecordStore
         return $updated;
     }
 
+    /**
+     * @param list<int> $ids
+     * @return list<Record>
+     */
+    public function archiveUntracked(array $ids, string $time, string $trigger): array
+    {
+        $idSet = array_flip($ids);
+        $kept = [];
+        $archived = [];
+        foreach ($this->items as $r) {
+            if (isset($idSet[$r->id])) {
+                $archived[] = $r->appendLog("archived at {$time} ({$trigger})");
+            } else {
+                $kept[] = $r;
+            }
+        }
+        if ($archived === []) {
+            return [];
+        }
+        $this->items = $kept;
+        $this->archived = array_merge($this->archived, $archived);
+
+        return $archived;
+    }
+
     /** @return list<Record> */
     public function loadArchive(): array
     {
