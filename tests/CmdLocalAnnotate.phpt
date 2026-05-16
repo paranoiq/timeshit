@@ -133,7 +133,7 @@ $dayRecord = new Record(
 );
 [$app, , , $io] = newApp('2026-05-09 10:00', [$dayRecord]);
 Assert::same(1, $app->run(['ts', 'note', 'should', 'not', 'land']));
-Assert::contains('no record to add note to', $io->getErr());
+Assert::contains('no entry to add note to', $io->getErr());
 
 // 13. with both a day record and a regular record, note lands on the regular one
 [$app, $store, $clock] = newApp('2026-05-09 10:00', [$dayRecord]);
@@ -172,7 +172,7 @@ Assert::contains('updated type Documentation at 2026-05-09 11:00 (type)', $items
 $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
 Assert::same(1, $app->run(['ts', 'type', '#99', 'doc']));
-Assert::contains('record #99 not found', $io->getErr());
+Assert::contains('entry #99 not found', $io->getErr());
 
 // 17. type #id refuses day records
 $dayRecord = new Record(
@@ -186,7 +186,7 @@ $dayRecord = new Record(
 );
 [$app, , , $io] = newApp('2026-05-09 10:00', [$dayRecord]);
 Assert::same(1, $app->run(['ts', 'type', '#1', 'doc']));
-Assert::contains('refusing to edit day record #1', $io->getErr());
+Assert::contains('refusing to edit day entry #1', $io->getErr());
 
 // 18. note #id appends to a closed record
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
@@ -212,4 +212,4 @@ Assert::same('first | second', $store->load()[0]->note);
 $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
 Assert::same(1, $app->run(['ts', 'note', '#99', 'nope']));
-Assert::contains('record #99 not found', $io->getErr());
+Assert::contains('entry #99 not found', $io->getErr());

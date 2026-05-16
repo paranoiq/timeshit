@@ -33,6 +33,7 @@ use Timeshit\Youtrack\WorkItemType;
 use Timeshit\Youtrack\WorkItemTypeCache;
 use Timeshit\Youtrack\YoutrackClient;
 use function array_filter;
+use function array_merge;
 use function array_values;
 use function count;
 use function ctype_digit;
@@ -54,8 +55,10 @@ use function posix_kill;
 use function is_int;
 use function ksort;
 use function max;
+use function mb_strimwidth;
 use function mb_strlen;
 use function mb_strtolower;
+use function mb_strwidth;
 use function mb_substr;
 use function rtrim;
 use function sprintf;
@@ -286,73 +289,77 @@ final class App
 
             return Ansi::lgreen(Ansi::underline($head) . $tail);
         };
-        $req = static function(string $name): string {
-            return $name === 'note' ? Ansi::lblue("<{$name}>"): Ansi::lyellow("<{$name}>");
+        $argColor = static function(string $name, string $text): string {
+            return match ($name) {
+                'issue', 'id' => Ansi::yellow($text),
+                'type' => Ansi::lmagenta($text),
+                'note' => Ansi::lblue($text),
+                default => Ansi::lyellow($text),
+            };
         };
-        $opt = static function(string $name): string {
-            return Ansi::lblack("[") . ($name === 'note' ? Ansi::lblue("<{$name}>") : Ansi::lyellow("<{$name}>")) . Ansi::lblack("]");
-        };
-        $flag = static fn(string $name): string => Ansi::lblack("[") . Ansi::lyellow($name) . Ansi::lblack("]");
-        $val = static fn(string $name): string => Ansi::lgreen($name);
+        $req = static fn(string $name): string => $argColor($name, "<{$name}>");
+        $opt = static fn(string $name): string => Ansi::lblack('[') . $argColor($name, "<{$name}>") . Ansi::lblack(']');
+        $flag = static fn(string $name): string => Ansi::lyellow(Ansi::underline(mb_substr($name, 0, 1)) . mb_substr($name, 1));
+        $val = static fn(string $name): string => Ansi::lyellow($name);
         $app = static fn(string $name): string => Ansi::lblue($name);
 
         $groups = [
             'Info' => [
-                [$cmd('status'),   '', 'Show the currently active record (if any) and the last closed one'],
+                [$cmd('status'),   '', 'Show current status (active entry, previous, tracked time)'],
                 [$cmd('issues'),   $opt('search'), 'List ' . $app('YouTrack') . ' issues you are involved in (cached for 24h)'],
                 [$cmd('remote'),   '', 'List time entries already on ' . $app('YouTrack') . ' (cached for 24h)'],
-                [$cmd('local'),    $flag('details'), 'List locally tracked records grouped by day/issue/type (' . $val('details') . ': one row per record)'],
-                [$cmd('all'),      $flag('details'), 'List time entries from both ' . $cmd('remote') . ' and ' . $cmd('local')],
+                [$cmd('local'),    Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List locally tracked entries grouped by day/issue/type (not grouped with '. $flag('details') . ')'],
+                [$cmd('all'),      Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List time entries from both ' . $cmd('remote') . ' and ' . $cmd('local')],
                 //[$cmd('types'),    '', 'List the ' . $app('YouTrack') . ' work-item types (cached for 24h)'],
             ],
             'Actions' => [
                 [$cmd('track'),    $req('issue') . ' ' . $opt('type'), 'Start tracking of ' . $req('issue')],
-                [$cmd('analyse'),  $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultAnalyseType') . ' from config'],
-                [$cmd('design'),   $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultDesignType') . ' from config'],
-                [$cmd('implement'),$req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultImplementType') . ' from config'],
-                [$cmd('review'),   $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultReviewType') . ' from config'],
-                [$cmd('test'),     $req('issue'), 'Like ' . $cmd('track') . ' for ' . $req('issue') . ' with ' . Ansi::lgreen('defaultTestType') . ' from config'],
-                [$cmd('interrupt'),$req('issue') . ' ' . $opt('type'), 'Like ' . $cmd('track') . ', but mark the currently open record as paused (auto-resumed by ' . $cmd('done') . ')'],
-                [$cmd('meeting'),  $opt('note'), 'Like ' . $cmd('interrupt') . ', but uses ' . Ansi::lgreen('defaultMeetingIssue') . ' / ' . Ansi::lgreen('defaultMeetingType') . ' from config'],
-                [$cmd('mail'),     $opt('note'), 'Like ' . $cmd('interrupt') . ', but uses ' . Ansi::lgreen('defaultMailIssue') . ' / ' . Ansi::lgreen('defaultMailType') . ' from config'],
+                [' ' . $cmd('analyse'),  $req('issue'), 'Like ' . $cmd('track') . ', but with ' . Ansi::lyellow('defaultAnalyseType') . ' from config'],
+                [' ' . $cmd('design'),   $req('issue'), 'Like ' . $cmd('track') . ', but with ' . Ansi::lyellow('defaultDesignType') . ' from config'],
+                [' ' . $cmd('implement'),$req('issue'), 'Like ' . $cmd('track') . ', but with ' . Ansi::lyellow('defaultImplementType') . ' from config'],
+                [' ' . $cmd('review'),   $req('issue'), 'Like ' . $cmd('track') . ', but with ' . Ansi::lyellow('defaultReviewType') . ' from config'],
+                [' ' . $cmd('test'),     $req('issue'), 'Like ' . $cmd('track') . ', but with ' . Ansi::lyellow('defaultTestType') . ' from config'],
+                [$cmd('interrupt'),$req('issue') . ' ' . $opt('type'), 'Like ' . $cmd('track') . ', but marks the currently open entry as paused (auto-resumed by ' . $cmd('done') . ')'],
+                [' ' . $cmd('meeting'),  $opt('note'), 'Like ' . $cmd('interrupt') . ', but with ' . Ansi::lyellow('defaultMeetingIssue') . ' / ' . Ansi::lyellow('defaultMeetingType') . ' from config'],
+                [' ' . $cmd('mail'),     $opt('note'), 'Like ' . $cmd('interrupt') . ', but with ' . Ansi::lyellow('defaultMailIssue') . ' / ' . Ansi::lyellow('defaultMailType') . ' from config'],
                 [$cmd('pause'),    $opt('note'), 'Pause the current entry'],
                 [$cmd('resume'),   '', 'Resume tracking from the most recent entry (alias: ' . $cmd('continue') . ')'],
-                [$cmd('done'),     $opt('note'), 'End the current entry and auto-resume the most recently interrupted one'],
-                [$cmd('end'),      $opt('note'), 'End the current entry'],
-                [$cmd('switch'),   $req('type'), 'End current entry and start same one with different ' . $req('type')],
-                [$cmd('skip'),     $req('span'), 'End the open record ' . $req('span') . ' ago and immediately open a new one'],
+                [$cmd('done'),     $opt('note'), 'End the current entry and resume the most recently interrupted one'],
+                [$cmd('end'),      $opt('note'), 'End the current entry (do not resume any)'],
+                [$cmd('switch'),   $req('type'), 'Switch current entry to different ' . $req('type') . ' from now'],
+                [$cmd('skip'),     $req('span'), 'Skip time ' . $req('span') . ' from currentl entry'],
                 [$cmd('grab'),     $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Grab a ' . $req('span') . '-long time from the open entry and fill it with ' . $req('issue')],
                 [$cmd('put'),      $req('issue') . ' ' . $req('span') . ' ' . $opt('type'), 'Add a ' . $req('span') . '-long entry for ' . $req('issue') . ' without tracking'],
-                [$cmd('day'),      $req('issue') . ' ' . $opt('date') . ' ' . $opt('type'), 'Log a full 8h day for ' . $req('issue') . ' on ' . $req('date') . ', default type: ' . Ansi::lgreen($config->defaultDayType)],
+                [$cmd('day'),      $req('issue') . ' ' . $opt('date') . ' ' . $opt('type'), 'Log a full 8h day for ' . $req('issue') . ' on ' . $req('date') . ', default type is ' . $val('defaultDayType') . ' from config'],
                 [$cmd('vacation'), $req('date') . ' ' . $req('date'), 'Log a full 8h day on every working day between the two ' . $req('date') . 's (inclusive)'],
             ],
             'Edits' => [
-                [$cmd('at'),       $opt('id') . ' ' . $req('time'), 'Set the start time (open record) or end time (closed record) of the last non-day record (or ' . $req('id') . ')'],
-                [$cmd('before'),   $opt('id') . ' ' . $req('span'), 'Move the start (open) or end (closed) of the last non-day record earlier by ' . $req('span') . ' (or ' . $req('id') . ')'],
-                [$cmd('after'),    $opt('id') . ' ' . $req('span'), 'Move the end of the last closed non-day record later by ' . $req('span') . ' (or ' . $req('id') . ')'],
+                [$cmd('at'),       $opt('id') . ' ' . $req('time'), 'Set the start time (open entry) or end time (closed entry) of the last entry (or ' . $req('id') . ')'],
+                [$cmd('before'),   $opt('id') . ' ' . $req('span'), 'Move the start (open) or end (closed) of the last (or ' . $req('id') . ') entry earlier by ' . $req('span')],
+                [$cmd('after'),    $opt('id') . ' ' . $req('span'), 'Move the end of the last closed (or ' . $req('id') . ') entry later by ' . $req('span')],
                 [$cmd('type'),     $opt('id') . ' ' . $req('type'), 'Change the type of the current entry (or ' . $req('id') . ')'],
                 [$cmd('note'),     $opt('id') . ' ' . $req('note'), 'Add a note to the current entry (or ' . $req('id') . ')'],
-                [$cmd('edit'),     $req('id'),   'Open record ' . $req('id') . ' in the configured ' . Ansi::lgreen('editor') . ' for free-form editing'],
-                [$cmd('delete'),   $req('id'),   'Delete record ' . $req('id') . ' after confirmation'],
+                [$cmd('edit'),     $req('id'),   'Open entry ' . $req('id') . ' in the configured ' . Ansi::lyellow('editor') . ' for free-form editing'],
+                [$cmd('delete'),   $req('id'),   'Delete entry ' . $req('id')],
             ],
             'Sync' => [
                 [$cmd('refresh'),  '', 'Refresh all caches from YouTrack'],
-                [$cmd('push'),     $opt('date'), 'Sum closed records by (day, issue, type) up to ' . $req('date') . ' (default: ' . $val('yesterday') . ') and create work items in ' . $app('YouTrack')],
+                [$cmd('push'),     $opt('date'), 'Sum closed entries by (day, issue, type) up to ' . $req('date') . ' (default: ' . $val('yesterday') . ') and create work items in ' . $app('YouTrack')],
             ],
             'Triggers' => [
-                [$cmd('checkout'), $req('branch') . ' ' . $req('repo'), 'Switch tracking on git checkout (called from ' . $cmd('hooks/post-checkout') . ')'],
-                [$cmd('server'),   $req('action'), 'Start (' . $val('start') . ') or stop (' . $val('stop') . ') the local timeshit server (auto-started by ' . Ansi::lblue('timeshit.php') . ' unless stopped)'],
+                [$cmd('checkout'), $req('branch') . ' ' . $req('repo'), 'Switch tracking on ' . $app('git checkout') . ' (called from ' . $app('hooks/post-checkout') . ')'],
+                [$cmd('server'),   $req('action'), 'Start or stop the local timeshit server (auto-started by ' . Ansi::lblue('timeshit.php') . ' unless stopped)'],
             ],
         ];
 
         $argRows = [
-            [$req('issue'),  'YouTrack issue id, e.g. ' . $val('SW-1234') . ' or just ' . $val('1234') . ' or free text for not yet created issues'],
-            [$req('type'),   'work-item type; see ' . $cmd('types') . ' for the allowed list. Default: ' . Ansi::lgreen($config->defaultTrackType)],
-            [$req('span'),   'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m')],
+            [$req('issue'),  $app('YouTrack') . ' issue id, e.g. ' . $val('SW-1234') . ' or just ' . $val('1234') . ' or free text for not yet created issues'],
+            [$req('id'),     'numeric entry id (the ' . Ansi::lblack('#n') . ' column shown by ' . $cmd('local') . ' / ' . $cmd('status') . ')'],
+            [$req('type'),   'work-item type; see ' . Ansi::lgreen(Ansi::underline('types')) . ' for the allowed list. Default is ' . $val('defaultTrackType') . ' from config'],
+            [$req('note'),   'free-form text; appended to the entrie\'s existing note'],
+            [$req('span'),   'duration like ' . $val('30m') . ', ' . $val('1h 20m') . ' (units ' . $val('d') . '/' . $val('h') . '/' . $val('m') . ')'],
             [$req('time'),   $val('HH:MM') . ' or full date+time (e.g. ' . $val('2026-05-09 10:00') . ')'],
             [$req('date'),   'expressions like ' . $val('yesterday') . ' / ' . $val('yes') . ' / ' . $val('y') . ', day-of-month (e.g. ' . $val('15') . ') or full date. Default: ' . $val('today')],
-            [$req('note'),   'free-form text; appended to the record\'s existing note'],
-            [$req('id'),     'numeric record id (the ' . Ansi::lblack('#n') . ' column shown by ' . $cmd('local') . ' / ' . $cmd('status') . ')'],
             [$req('branch'), 'git branch name (used to extract the issue id; passed by git hook)'],
             [$req('repo'),   'repository name (passed by git hook)'],
             [$req('search'), 'case-insensitive substring matched against issue title and description'],
@@ -386,6 +393,8 @@ final class App
         foreach ($argRows as [$name, $desc]) {
             $io->out("  " . $name . str_repeat(' ', $argNameWidth - Ansi::length($name) + 2) . $desc . "\n");
         }
+
+        $io->out("\nConfiguration: see config/config.neon and config/secrets.neon\n");
     }
 
     private function cmdIssues(?string $search): void
@@ -401,7 +410,7 @@ final class App
                     || str_contains(mb_strtolower($i->description), $needle),
             ));
         }
-        (new IssuesView($this->config->youtrackBaseUrl, $data['user']))->render($issues, $data['workItems']);
+        (new IssuesView($this->config->youtrackBaseUrl, $data['user']))->render($issues, $data['workItems'], $this->store->load());
     }
 
     private function cmdRemote(): void
@@ -413,7 +422,7 @@ final class App
     private function cmdLocal(?string $modifier): void
     {
         $details = self::resolveDetailsFlag('local', $modifier);
-        $items = $this->store->load();
+        $items = array_merge($this->store->loadArchive(), $this->store->load());
         (new RecordsView($this->config->youtrackBaseUrl))->render($items, $this->issueData->titles(), $details);
     }
 
@@ -457,7 +466,7 @@ final class App
             break;
         }
         if ($active === null && $previous === null) {
-            $this->io->out("No tracking records.\n");
+            $this->io->out("No tracking entries.\n");
         } else {
             $today = $this->clock->now()->format('Y-m-d');
             $now = $this->clock->nowMinute();
@@ -478,18 +487,24 @@ final class App
                 }
                 $todayMinutes += max(0, intdiv($e->getTimestamp() - $s->getTimestamp(), 60));
             }
-            $this->io->out(Ansi::lwhite('Today') . ": " . Format::minutes($todayMinutes) . "\n\n");
+            $isWeekend = (int) $this->clock->now()->format('N') >= 6;
+            $todayColor = match (true) {
+                $isWeekend => Ansi::yellow(...),
+                $todayMinutes >= 8 * 60 => Ansi::lgreen(...),
+                default => Ansi::red(...),
+            };
+            $this->io->out(Ansi::lwhite('Today') . ": " . Format::spent($todayMinutes, $todayColor, false) . "\n\n");
 
             $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
             $titleByIssueId = $this->issueData->titles();
             if ($active !== null) {
-                $this->io->out(Ansi::lwhite('Active') . ":\n");
+                $this->io->out(Ansi::lyellow('Active:') . "\n");
                 $this->io->out($this->statusLine($active, $baseUrl, $titleByIssueId) . "\n");
             } else {
-                $this->io->out(Ansi::lblack('No active record.') . "\n");
+                $this->io->out(Ansi::lblack('No active entry.') . "\n");
             }
             if ($previous !== null) {
-                $this->io->out("\n" . Ansi::lwhite('Previous') . ":\n");
+                $this->io->out("\n" . Ansi::lyellow('Previous:') . "\n");
                 $this->io->out($this->statusLine($previous, $baseUrl, $titleByIssueId) . "\n");
             }
         }
@@ -645,14 +660,16 @@ final class App
 
         if ($r->endedAt === null) {
             $now = $this->clock->nowMinute();
-            $duration = Format::duration($r->startedAt, $now) . ' so far';
+            $minutes = max(0, intdiv((new DateTimeImmutable($now))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));
+            $duration = Format::spent($minutes, null, false) . Ansi::lblack('so far');
             $timeRange = $startStr . ' → ' . Ansi::lgreen('…');
         } else {
             $endDate = substr($r->endedAt, 0, 10);
             $endStr = $endDate === $today && $startDate === $today
                 ? substr($r->endedAt, 11)
                 : $r->endedAt;
-            $duration = Format::duration($r->startedAt, $r->endedAt);
+            $minutes = max(0, intdiv((new DateTimeImmutable($r->endedAt))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));
+            $duration = Format::spent($minutes, null, false);
             $timeRange = $startStr . Ansi::lblack('–') . $endStr;
         }
 
@@ -663,7 +680,7 @@ final class App
             Format::recordId($r->id),
             Format::type($r->type),
             $timeRange,
-            Ansi::lblack('(' . $duration . ')'),
+            Ansi::lblack('(') . $duration . Ansi::lblack(')'),
             Format::status($r->status),
         );
         $title = $titleByIssueId[$r->issueId] ?? '';
@@ -739,11 +756,11 @@ final class App
                 }
             }
             if ($index === null) {
-                throw new RuntimeException("type: record #{$id} not found");
+                throw new RuntimeException("type: entry #{$id} not found");
             }
             $current = $items[$index];
             if ($current->status === 'day') {
-                throw new RuntimeException("type: refusing to edit day record #{$id}");
+                throw new RuntimeException("type: refusing to edit day entry #{$id}");
             }
             if ($current->type === $matched) {
                 return;
@@ -904,11 +921,11 @@ final class App
         $this->store->transaction(function (): void {
             $items = $this->store->load();
             if ($items === []) {
-                throw new RuntimeException('resume: no record to resume');
+                throw new RuntimeException('resume: no entry to resume');
             }
             $last = $items[count($items) - 1];
             if ($last->isOpen() && $last->status !== 'untracked') {
-                throw new RuntimeException('resume: a record is already open');
+                throw new RuntimeException('resume: an entry is already open');
             }
             $target = null;
             for ($i = count($items) - 1; $i >= 0; $i--) {
@@ -928,7 +945,7 @@ final class App
                 }
             }
             if ($target === null) {
-                throw new RuntimeException('resume: no record to resume');
+                throw new RuntimeException('resume: no entry to resume');
             }
             $now = $this->clock->nowMinute();
             $next = new Record(
@@ -963,7 +980,7 @@ final class App
                 throw new RuntimeException("skip: invalid existing time '{$last->startedAt}'");
             }
             if ($endDt <= $startDt) {
-                throw new RuntimeException("skip: span too large — would end at or before the open record's start ({$last->startedAt})");
+                throw new RuntimeException("skip: span too large — would end at or before the open entrie's start ({$last->startedAt})");
             }
 
             $now = $nowDt->format('Y-m-d H:i');
@@ -1014,7 +1031,7 @@ final class App
                 throw new RuntimeException("grab: invalid existing time '{$last->startedAt}'");
             }
             if ($splitDt <= $startDt) {
-                throw new RuntimeException("grab: span too large — would split at or before the open record's start ({$last->startedAt})");
+                throw new RuntimeException("grab: span too large — would split at or before the open entrie's start ({$last->startedAt})");
             }
 
             $now = $nowDt->format('Y-m-d H:i');
@@ -1096,7 +1113,7 @@ final class App
             $result = $this->store->noteLast($note, $this->clock->nowMinute(), 'note');
             $item = $result['item'];
             if ($item === null) {
-                throw new RuntimeException('note: no record to add note to');
+                throw new RuntimeException('note: no entry to add note to');
             }
             if (!$result['changed']) {
                 return;
@@ -1116,11 +1133,11 @@ final class App
                 }
             }
             if ($index === null) {
-                throw new RuntimeException("note: record #{$id} not found");
+                throw new RuntimeException("note: entry #{$id} not found");
             }
             $current = $items[$index];
             if ($current->status === 'day') {
-                throw new RuntimeException("note: refusing to edit day record #{$id}");
+                throw new RuntimeException("note: refusing to edit day entry #{$id}");
             }
             $merged = $current->note === '' ? $note : $current->note . ' | ' . $note;
             if ($merged === $current->note) {
@@ -1154,7 +1171,7 @@ final class App
             return null;
         });
         if ($target === null) {
-            throw new RuntimeException("edit: record #{$id} not found");
+            throw new RuntimeException("edit: entry #{$id} not found");
         }
 
         $original = Neon::encode([
@@ -1236,7 +1253,7 @@ final class App
                 }
             }
             if ($index === null) {
-                throw new RuntimeException("edit: record #{$target->id} disappeared during edit");
+                throw new RuntimeException("edit: entry #{$target->id} disappeared during edit");
             }
             $current = $items[$index];
 
@@ -1310,7 +1327,7 @@ final class App
                 }
             }
             if ($index === null) {
-                throw new RuntimeException("delete: record #{$id} not found");
+                throw new RuntimeException("delete: entry #{$id} not found");
             }
             $target = $items[$index];
 
@@ -1318,7 +1335,7 @@ final class App
             $titleByIssueId = $this->issueData->titles();
             $this->io->err($this->statusLine($target, $baseUrl, $titleByIssueId) . "\n\n");
 
-            if (!$this->confirm('Delete this record?')) {
+            if (!$this->confirm('Delete this entry?')) {
                 $this->io->err("Cancelled.\n");
 
                 return;
@@ -1436,7 +1453,7 @@ final class App
                 }
                 if ((new DateTimeImmutable($existing->startedAt))->format('Y-m-d') === $dayKey) {
                     throw new RuntimeException(
-                        "day: a full-day record already exists on {$dayKey} ({$existing->issueId}, {$existing->type})",
+                        "day: a full-day entry already exists on {$dayKey} ({$existing->issueId}, {$existing->type})",
                     );
                 }
             }
@@ -1509,7 +1526,7 @@ final class App
                 if (isset($existingDays[$key])) {
                     $clash = $existingDays[$key];
                     throw new RuntimeException(
-                        "vacation: a full-day record already exists on {$key} ({$clash->issueId}, {$clash->type})",
+                        "vacation: a full-day entry already exists on {$key} ({$clash->issueId}, {$clash->type})",
                     );
                 }
             }
@@ -1662,10 +1679,10 @@ final class App
                 }
             }
             if ($targetIndex === null) {
-                throw new RuntimeException("{$cmd}: record #{$targetId} not found");
+                throw new RuntimeException("{$cmd}: entry #{$targetId} not found");
             }
             if ($items[$targetIndex]->status === 'day') {
-                throw new RuntimeException("{$cmd}: refusing to edit day record #{$targetId}");
+                throw new RuntimeException("{$cmd}: refusing to edit day entry #{$targetId}");
             }
         } else {
             for ($i = count($items) - 1; $i >= 0; $i--) {
@@ -1676,7 +1693,7 @@ final class App
                 break;
             }
             if ($targetIndex === null) {
-                throw new RuntimeException("{$cmd}: no record to modify");
+                throw new RuntimeException("{$cmd}: no entry to modify");
             }
         }
 
@@ -1684,7 +1701,7 @@ final class App
         $isOpen = $target->isOpen();
 
         if ($cmd === 'after' && $isOpen) {
-            throw new RuntimeException('after: last record is open (use before/at to move its start)');
+            throw new RuntimeException('after: last entry is open (use before/at to move its start)');
         }
 
         if ($isOpen) {
@@ -1692,7 +1709,7 @@ final class App
         } else {
             $existing = $target->endedAt;
             if ($existing === null) {
-                throw new RuntimeException("{$cmd}: closed record has no end time");
+                throw new RuntimeException("{$cmd}: closed entry has no end time");
             }
         }
 
@@ -1752,10 +1769,10 @@ final class App
                     $sDt = new DateTimeImmutable($adjusted->startedAt);
                     $eDt = new DateTimeImmutable($adjusted->endedAt);
                 } catch (Exception) {
-                    throw new RuntimeException("{$cmd}: invalid resulting timestamps on previous record");
+                    throw new RuntimeException("{$cmd}: invalid resulting timestamps on previous entry");
                 }
                 if ($sDt >= $eDt) {
-                    throw new RuntimeException("{$cmd}: would result in non-positive duration on previous record ({$adjusted->startedAt} → {$adjusted->endedAt})");
+                    throw new RuntimeException("{$cmd}: would result in non-positive duration on previous entry ({$adjusted->startedAt} → {$adjusted->endedAt})");
                 }
             }
         }
@@ -1786,10 +1803,12 @@ final class App
         $start = substr($r->startedAt, 11);
         if ($r->endedAt === null) {
             $now = $this->clock->nowMinute();
-            $duration = Format::duration($r->startedAt, $now) . ' so far';
+            $minutes = max(0, intdiv((new DateTimeImmutable($now))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));
+            $duration = Format::spent($minutes, null, false) . Ansi::lblack('so far');
             $timeRange = $start . ' ' . Ansi::lblack('→') . ' ' . Ansi::lgreen('  …  ');
         } else {
-            $duration = Format::duration($r->startedAt, $r->endedAt);
+            $minutes = max(0, intdiv((new DateTimeImmutable($r->endedAt))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));
+            $duration = Format::spent($minutes, null, false);
             $timeRange = $start . Ansi::lblack('–') . substr($r->endedAt, 11);
         }
         $url = rtrim($this->config->youtrackBaseUrl, '/') . '/issue/' . $r->issueId;
@@ -1800,7 +1819,7 @@ final class App
             Format::recordId($r->id),
             Format::type($r->type),
             $timeRange,
-            Ansi::lblack('(' . $duration . ')'),
+            Ansi::lblack('(') . $duration . Ansi::lblack(')'),
         );
     }
 
@@ -1872,18 +1891,24 @@ final class App
             $typeNameToId[$t->name] = $t->id;
         }
 
+        /** @var array<string, int> $dayTotal */
+        $dayTotal = [];
+        foreach ($groups as $g) {
+            $dayTotal[$g['date']] = ($dayTotal[$g['date']] ?? 0) + $g['minutes'];
+        }
+
         $tz = new DateTimeZone($this->config->timezone);
         $succeeded = 0;
         $failed = 0;
+        $currentDate = '';
 
         foreach ($groups as $g) {
+            if ($g['date'] !== $currentDate) {
+                $this->printPushDateHeader($g['date'], $dayTotal[$g['date']]);
+                $currentDate = $g['date'];
+            }
             if ($g['minutes'] <= 0) {
-                $this->io->err(Ansi::lyellow(sprintf(
-                    "Skipped %s (%s) on %s — zero minutes\n",
-                    $g['issueId'],
-                    $g['type'],
-                    $g['date'],
-                )));
+                $this->printPushSkipped($g);
                 continue;
             }
             $typeId = $typeNameToId[$g['type']] ?? null;
@@ -1918,6 +1943,11 @@ final class App
         }
 
         $this->io->err(sprintf("\nPushed: %d, failed: %d (cutoff %s)\n", $succeeded, $failed, $cutoffKey));
+
+        if ($succeeded > 0) {
+            $this->issueData->refresh();
+            $this->types->refresh();
+        }
     }
 
     private static function recordMinutes(Record $r): int
@@ -1935,16 +1965,29 @@ final class App
         return max(0, intdiv($e->getTimestamp() - $s->getTimestamp(), 60));
     }
 
+    private function printPushDateHeader(string $date, int $minutes): void
+    {
+        $dt = new DateTimeImmutable($date);
+        $isWeekend = (int) $dt->format('N') >= 6;
+        $dayColor = match (true) {
+            $isWeekend => Ansi::yellow(...),
+            $minutes >= 8 * 60 => Ansi::lgreen(...),
+            default => Ansi::red(...),
+        };
+        $dayLabel = $dt->format('l j.n.');
+        $this->io->err('  ' . $dayColor(sprintf('%-16s', $dayLabel)) . '  ' . Format::spent($minutes, $dayColor) . "\n");
+    }
+
     /** @param array{date: string, issueId: string, type: string, minutes: int, ids: list<int>, notes: list<string>} $g */
     private function printPushSuccess(array $g, string $workItemId): void
     {
         $this->io->err(sprintf(
-            "%s %s %s  %s  %s → %s\n",
+            "    %s %s  %s  %s  %s  → %s\n",
             Ansi::lgreen('✓'),
-            $g['issueId'],
-            $g['date'],
+            sprintf('%-12s', $g['issueId']),
+            Format::spent($g['minutes']),
             Format::type($g['type']),
-            Format::minutes($g['minutes']),
+            self::padTitle($this->issueData->titles()[$g['issueId']] ?? '', 30),
             $workItemId,
         ));
     }
@@ -1953,14 +1996,35 @@ final class App
     private function printPushFailure(array $g, string $reason): void
     {
         $this->io->err(sprintf(
-            "%s %s %s  %s  %s — %s\n",
+            "    %s %s  %s  %s  %s  — %s\n",
             Ansi::red('✗'),
-            $g['issueId'],
-            $g['date'],
+            sprintf('%-12s', $g['issueId']),
+            Format::spent($g['minutes']),
             Format::type($g['type']),
-            Format::minutes($g['minutes']),
+            self::padTitle($this->issueData->titles()[$g['issueId']] ?? '', 30),
             Ansi::red($reason),
         ));
+    }
+
+    /** @param array{date: string, issueId: string, type: string, minutes: int, ids: list<int>, notes: list<string>} $g */
+    private function printPushSkipped(array $g): void
+    {
+        $this->io->err(sprintf(
+            "    %s %s  %s  %s  %s  %s\n",
+            Ansi::lyellow('—'),
+            sprintf('%-12s', $g['issueId']),
+            Format::spent($g['minutes']),
+            Format::type($g['type']),
+            self::padTitle($this->issueData->titles()[$g['issueId']] ?? '', 30),
+            Ansi::lyellow('zero minutes'),
+        ));
+    }
+
+    private static function padTitle(string $title, int $width): string
+    {
+        $truncated = mb_strimwidth($title, 0, $width, '…');
+
+        return $truncated . str_repeat(' ', max(0, $width - mb_strwidth($truncated)));
     }
 
 }

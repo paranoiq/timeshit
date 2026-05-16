@@ -2,14 +2,19 @@
 
 namespace Timeshit\View;
 
+use DateTimeImmutable;
 use Timeshit\Format;
+use Timeshit\Local\Record;
 use Timeshit\Util\Ansi;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\WorkItem;
+use function intdiv;
+use function max;
 use function printf;
 use function rtrim;
 use function sprintf;
 use function str_repeat;
+use function time;
 use function usort;
 
 final class IssuesView
@@ -22,18 +27,43 @@ final class IssuesView
     /**
      * @param list<Issue> $issues
      * @param list<WorkItem> $workItems
+     * @param list<Record> $records local records (not yet synced to YouTrack) — added to the SPENT column
      */
-    public function render(array $issues, array $workItems): void
+    public function render(array $issues, array $workItems, array $records = []): void
     {
         $baseUrl = rtrim($this->baseUrl, '/');
+        $currentUser = $this->currentUser;
+        $mineActive = static function (Issue $issue) use ($currentUser): bool {
+            return $issue->assignee === $currentUser && Format::statePriority($issue->state) !== 7;
+        };
         usort(
             $issues,
-            static fn(Issue $a, Issue $b): int => Format::statePriority($a->state) <=> Format::statePriority($b->state),
+            static function (Issue $a, Issue $b) use ($mineActive): int {
+                $aMine = $mineActive($a);
+                $bMine = $mineActive($b);
+                if ($aMine !== $bMine) {
+                    return $aMine ? -1 : 1;
+                }
+
+                return Format::statePriority($a->state) <=> Format::statePriority($b->state);
+            },
         );
 
         $mineByIssue = [];
         foreach ($workItems as $item) {
             $mineByIssue[$item->issueId] = ($mineByIssue[$item->issueId] ?? 0) + $item->minutes;
+        }
+        $now = time();
+        foreach ($records as $record) {
+            if ($record->status === 'untracked') {
+                continue;
+            }
+            $start = (new DateTimeImmutable($record->startedAt))->getTimestamp();
+            $end = $record->endedAt !== null
+                ? (new DateTimeImmutable($record->endedAt))->getTimestamp()
+                : $now;
+            $mineByIssue[$record->issueId] = ($mineByIssue[$record->issueId] ?? 0)
+                + max(0, intdiv($end - $start, 60));
         }
 
         echo 'ROLES: a' . Ansi::lblack('=assignee')
@@ -46,20 +76,45 @@ final class IssuesView
             . "\n\n";
 
         $format = "%-8s %-8s %-11s %-12s %-8s %-17s %-11s %-11s %s\n";
+        $printRule = static function () use ($format): void {
+            printf(
+                $format,
+                str_repeat('-', 8),
+                str_repeat('-', 8),
+                str_repeat('-', 11),
+                str_repeat('-', 12),
+                str_repeat('-', 8),
+                str_repeat('-', 17),
+                str_repeat('-', 11),
+                str_repeat('-', 11),
+                str_repeat('-', 60),
+            );
+        };
         printf($format, 'ID', 'TYPE', 'CAT.', 'STATE', 'ROLES', 'ASSIGNEE', '   SPENT', '    ALL', 'TITLE');
-        printf(
-            $format,
-            str_repeat('-', 8),
-            str_repeat('-', 8),
-            str_repeat('-', 11),
-            str_repeat('-', 12),
-            str_repeat('-', 8),
-            str_repeat('-', 17),
-            str_repeat('-', 11),
-            str_repeat('-', 11),
-            str_repeat('-', 60),
-        );
+        $printRule();
+        $lastWasMine = false;
+        $lastWasFinished = false;
+        $afterMinePrinted = false;
+        $beforeFinishedPrinted = false;
+        $first = true;
         foreach ($issues as $issue) {
+            $isMine = $mineActive($issue);
+            $isFinished = Format::statePriority($issue->state) === 7;
+            $needRule = false;
+            if (!$first && $lastWasMine && !$isMine && !$afterMinePrinted) {
+                $needRule = true;
+                $afterMinePrinted = true;
+            }
+            if (!$first && !$lastWasFinished && $isFinished && !$beforeFinishedPrinted) {
+                $needRule = true;
+                $beforeFinishedPrinted = true;
+            }
+            if ($needRule) {
+                $printRule();
+            }
+            $first = false;
+            $lastWasMine = $isMine;
+            $lastWasFinished = $isFinished;
             $url = $baseUrl . '/issue/' . $issue->id;
             $mine = $mineByIssue[$issue->id] ?? 0;
             printf(

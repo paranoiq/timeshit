@@ -81,7 +81,7 @@ final class RecordsView
 
             if ($weekKey !== $currentWeek) {
                 $weekColor = $weekTotal[$weekKey] >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
-                echo "\n" . $weekColor(sprintf('%-16s', $weekKey)) . '  ' . Format::spent($weekTotal[$weekKey], $weekColor) . "\n";
+                echo "\n" . $weekColor(sprintf('%-18s', $weekKey)) . '  ' . Format::spent($weekTotal[$weekKey], $weekColor) . "\n";
                 $currentWeek = $weekKey;
             }
 
@@ -105,6 +105,11 @@ final class RecordsView
                 $url = $baseUrl . '/issue/' . $item->issueId;
                 $type = Format::type($item->type);
                 $title = self::pad(mb_strimwidth($titleByIssueId[$item->issueId] ?? '', 0, 30, '…'), 30);
+                $idText = sprintf('%-12s', $item->issueId);
+                if ($item->status === 'synced') {
+                    $idText = Ansi::lblack($idText);
+                    $title = Ansi::lblack($title);
+                }
                 $startStr = date('H:i', $start);
                 $endStr = $item->endedAt !== null ? date('H:i', $end) : Ansi::lgreen('  …  ');
                 $time = $startStr . Ansi::lblack('–') . $endStr;
@@ -114,8 +119,9 @@ final class RecordsView
                     ? Format::spent($minutes, Ansi::lblack(...))
                     : Format::spent($minutes);
                 echo sprintf(
-                    "    %s  %s  %s  %s  %s%s  %s\n",
-                    Ansi::link($url, sprintf('%-12s', $item->issueId)),
+                    "    %s %s  %s  %s  %s  %s%s  %s\n",
+                    self::recordIndicator($item),
+                    Ansi::link($url, $idText),
                     $spent,
                     $type,
                     $title,
@@ -133,7 +139,7 @@ final class RecordsView
      */
     private function renderGrouped(array $items, array $titleByIssueId, string $baseUrl, int $now): void
     {
-        /** @var array<string, array{date: string, issueId: string, type: string, minutes: int, notes: list<string>, count: int}> $groups */
+        /** @var array<string, array{date: string, issueId: string, type: string, minutes: int, notes: list<string>, count: int, allSynced: bool, hasOpen: bool, hasFailed: bool}> $groups */
         $groups = [];
         foreach ($items as $item) {
             if ($item->status === 'untracked') {
@@ -154,12 +160,24 @@ final class RecordsView
                     'minutes' => 0,
                     'notes' => [],
                     'count' => 0,
+                    'allSynced' => true,
+                    'hasOpen' => false,
+                    'hasFailed' => false,
                 ];
             }
             $groups[$key]['minutes'] += $minutes;
             $groups[$key]['count']++;
             if ($item->note !== '' && !in_array($item->note, $groups[$key]['notes'], true)) {
                 $groups[$key]['notes'][] = $item->note;
+            }
+            if ($item->status !== 'synced') {
+                $groups[$key]['allSynced'] = false;
+            }
+            if ($item->endedAt === null) {
+                $groups[$key]['hasOpen'] = true;
+            }
+            if ($item->status === 'failed') {
+                $groups[$key]['hasFailed'] = true;
             }
         }
         ksort($groups);
@@ -191,7 +209,7 @@ final class RecordsView
             if ($weekKey !== $currentWeek) {
                 $weekMinutes = $weekTotal[$weekKey] ?? 0;
                 $weekColor = $weekMinutes >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
-                echo "\n" . $weekColor(sprintf('%-16s', $weekKey)) . '  ' . Format::spent($weekMinutes, $weekColor) . "\n";
+                echo "\n" . $weekColor(sprintf('%-18s', $weekKey)) . '  ' . Format::spent($weekMinutes, $weekColor) . "\n";
                 $currentWeek = $weekKey;
             }
 
@@ -210,12 +228,18 @@ final class RecordsView
                 $url = $baseUrl . '/issue/' . $g['issueId'];
                 $type = Format::type($g['type']);
                 $title = self::pad(mb_strimwidth($titleByIssueId[$g['issueId']] ?? '', 0, 30, '…'), 30);
+                $idText = sprintf('%-12s', $g['issueId']);
+                if ($g['allSynced']) {
+                    $idText = Ansi::lblack($idText);
+                    $title = Ansi::lblack($title);
+                }
                 $count = $g['count'] > 1 ? Ansi::lblack(sprintf('×%-2d', $g['count'])) : '   ';
                 $notes = implode(' | ', $g['notes']);
                 $notesPart = $notes === '' ? '' : '  ' . Ansi::lblack('"' . $notes . '"');
                 echo sprintf(
-                    "    %s  %s  %s  %s  %s%s\n",
-                    Ansi::link($url, sprintf('%-12s', $g['issueId'])),
+                    "    %s %s  %s  %s  %s  %s%s\n",
+                    self::groupIndicator($g),
+                    Ansi::link($url, $idText),
                     Format::spent($g['minutes']),
                     $type,
                     $title,
@@ -224,6 +248,29 @@ final class RecordsView
                 );
             }
         }
+    }
+
+    private static function recordIndicator(Record $r): string
+    {
+        if ($r->endedAt === null) {
+            return Ansi::lgreen('▶');
+        }
+        return match ($r->status) {
+            'synced' => Ansi::lblack('▣'),
+            'failed' => Ansi::red('✗'),
+            default  => Ansi::lyellow('○'),
+        };
+    }
+
+    /** @param array{allSynced: bool, hasOpen: bool, hasFailed: bool} $g */
+    private static function groupIndicator(array $g): string
+    {
+        return match (true) {
+            $g['hasFailed'] => Ansi::red('✗'),
+            $g['hasOpen']   => Ansi::lgreen('▶'),
+            $g['allSynced'] => Ansi::lblack('▣'),
+            default         => Ansi::lyellow('○'),
+        };
     }
 
     private static function pad(string $s, int $width): string

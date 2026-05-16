@@ -81,7 +81,7 @@ $app->run(['ts', 'day', 'OOO-1', '2026-05-08']);
 $snapshot = $store->load();
 $io->clear();
 Assert::same(1, $app->run(['ts', 'day', 'XYZ-2', '2026-05-08']));
-Assert::contains('a full-day record already exists on 2026-05-08', $io->getErr());
+Assert::contains('a full-day entry already exists on 2026-05-08', $io->getErr());
 Assert::equal($snapshot, $store->load());
 
 // 9. day inserts the closed record BEFORE any open record (preserves the open-is-latest invariant)
@@ -169,7 +169,7 @@ $app->run(['ts', 'day', 'OOO-1', '2026-05-06']);     // existing day on Wed
 $snapshot = $store->load();
 $io->clear();
 Assert::same(1, $app->run(['ts', 'vacation', '2026-05-04', '2026-05-08']));
-Assert::contains('a full-day record already exists on 2026-05-06', $io->getErr());
+Assert::contains('a full-day entry already exists on 2026-05-06', $io->getErr());
 Assert::equal($snapshot, $store->load());
 
 // 10i. vacation inserts all closed records BEFORE any open record (open-is-latest invariant)
@@ -275,10 +275,10 @@ Assert::count(1, $store->load());
 
 // === status ===
 
-// 11. status with no records prints "No tracking records."
+// 11. status with no records prints "No tracking entries."
 [$app, , , $io] = newApp();
 Assert::same(0, $app->run(['ts', 'status']));
-Assert::contains('No tracking records.', $io->getOut());
+Assert::contains('No tracking entries.', $io->getOut());
 
 // 12. status with only an open record shows it under Active
 [$app, , $clock, $io] = newApp('2026-05-09 10:00');
@@ -289,14 +289,14 @@ $app->run(['ts', 'status']);
 Assert::contains('Active', $io->getOut());
 Assert::contains('ABC-1', $io->getOut());
 
-// 13. status with only closed records shows "No active record." + Previous
+// 13. status with only closed records shows "No active entry." + Previous
 [$app, , $clock, $io] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
 $app->run(['ts', 'end']);
 $io->clear();
 $app->run(['ts', 'status']);
-Assert::contains('No active record.', $io->getOut());
+Assert::contains('No active entry.', $io->getOut());
 Assert::contains('Previous', $io->getOut());
 Assert::contains('ABC-1', $io->getOut());
 
@@ -314,7 +314,7 @@ Assert::contains('Previous', $out);
 Assert::contains('ABC-1', $out);
 Assert::contains('XYZ-2', $out);
 
-// 15. status skips day records — only a day record present still prints "No tracking records."
+// 15. status skips day records — only a day record present still prints "No tracking entries."
 $dayOnly = new Record(
     id: 1,
     issueId: 'OOO-1',
@@ -326,4 +326,4 @@ $dayOnly = new Record(
 );
 [$app, , , $io] = newApp('2026-05-09 10:00', [$dayOnly]);
 $app->run(['ts', 'status']);
-Assert::contains('No tracking records.', $io->getOut());
+Assert::contains('No tracking entries.', $io->getOut());

@@ -71,17 +71,9 @@ final class Format
     /** Like `type`, but without truncation or padding — for inline action messages. */
     public static function typeInline(string $type): string
     {
-        $normalized = preg_replace('/\s*\/\s*/', '/', $type) ?? $type;
-        $first = explode(',', $normalized)[0];
+        $first = self::typeFirst($type);
 
-        return match (true) {
-            $first === 'Implementation' => Ansi::lgreen($first),
-            $first === 'Test/Review'    => Ansi::cyan($first),
-            $first === 'Documentation'  => Ansi::blue($first),
-            $first === 'Communication'  => Ansi::yellow($first),
-            $first === 'Out of office'  => Ansi::magenta($first),
-            default => $first,
-        };
+        return self::colorizeType($first, $first);
     }
 
     public static function category(string $category): string
@@ -122,25 +114,40 @@ final class Format
     }
 
     /** @param (callable(string): string)|null $color */
-    public static function spent(int $totalMinutes, ?callable $color = null): string
+    public static function spent(int $totalMinutes, ?callable $color = null, bool $align = true): string
     {
-        if ($totalMinutes === 0) {
-            return sprintf('%11s', '-  ');
-        }
+        $apply = $color ?? static fn(string $s): string => $s;
         $minutes = $totalMinutes % 60;
         $totalHours = intdiv($totalMinutes, 60);
         $hours = $totalHours % 8;
         $days = intdiv($totalHours, 8);
-        $apply = $color ?? static fn(string $s): string => $s;
-        $daysPart = match (true) {
-            $days === 0 => '   ',
-            $days > 99 => $apply(' ∞') . Ansi::lblack('d'),
-            default => $apply(sprintf('%2d', $days)) . Ansi::lblack('d'),
-        };
-        $hoursPart = $hours > 0 ? $apply(sprintf('%d', $hours)) . Ansi::lblack('h') : '  ';
-        $minutesPart = $minutes > 0 ? $apply(sprintf('%2d', $minutes)) . Ansi::lblack('m') : '   ';
 
-        return $daysPart . ' ' . $hoursPart . ' ' . $minutesPart . ' ';
+        if ($align) {
+            $daysPart = match (true) {
+                $days === 0 => '   ',
+                $days > 99 => $apply(' ∞') . Ansi::lblack('d'),
+                default => $apply(sprintf('%2d', $days)) . Ansi::lblack('d'),
+            };
+            $hoursPart = $hours > 0 ? $apply(sprintf('%d', $hours)) . Ansi::lblack('h') : '  ';
+            $minutesPart = $minutes > 0 || $totalMinutes === 0
+                ? $apply(sprintf('%2d', $minutes)) . Ansi::lblack('m')
+                : '   ';
+
+            return $daysPart . ' ' . $hoursPart . ' ' . $minutesPart . ' ';
+        }
+
+        $parts = [];
+        if ($days > 0) {
+            $parts[] = ($days > 99 ? $apply('∞') : $apply((string) $days)) . Ansi::lblack('d');
+        }
+        if ($hours > 0) {
+            $parts[] = $apply((string) $hours) . Ansi::lblack('h');
+        }
+        if ($minutes > 0 || $parts === []) {
+            $parts[] = $apply((string) $minutes) . Ansi::lblack('m');
+        }
+
+        return implode(' ', $parts);
     }
 
     public static function assignee(string $assignee, string $currentUser): string
@@ -163,18 +170,31 @@ final class Format
 
     public static function type(string $type): string
     {
-        $normalized = preg_replace('/\s*\/\s*/', '/', $type) ?? $type;
-        $first = explode(',', $normalized)[0];
+        $first = self::typeFirst($type);
         $trimmed = mb_strimwidth($first, 0, 17, '…');
         $padded = $trimmed . str_repeat(' ', max(0, 17 - mb_strwidth($trimmed)));
 
+        return self::colorizeType($first, $padded);
+    }
+
+    /** First comma-separated segment of a type, with slash spacing normalized. */
+    private static function typeFirst(string $type): string
+    {
+        $normalized = preg_replace('/\s*\/\s*/', '/', $type) ?? $type;
+
+        return explode(',', $normalized)[0];
+    }
+
+    /** Applies the type-specific color to `$label` based on the canonical first segment `$first`. */
+    private static function colorizeType(string $first, string $label): string
+    {
         return match (true) {
-            $first === 'Implementation' => Ansi::lgreen($padded),
-            $first === 'Test/Review'    => Ansi::cyan($padded),
-            $first === 'Documentation'  => Ansi::blue($padded),
-            $first === 'Communication'  => Ansi::yellow($padded),
-            $first === 'Out of office'  => Ansi::magenta($padded),
-            default => $padded,
+            $first === 'Implementation' => Ansi::lgreen($label),
+            $first === 'Test/Review'    => Ansi::cyan($label),
+            $first === 'Documentation'  => Ansi::blue($label),
+            $first === 'Communication'  => Ansi::yellow($label),
+            $first === 'Out of office'  => Ansi::magenta($label),
+            default => $label,
         };
     }
 
@@ -184,9 +204,12 @@ final class Format
         $padded = sprintf('%-12s', $display);
 
         return match (true) {
-            $state === 'Blocked' => Ansi::red($padded),
-            $state === 'In-progress' => Ansi::lgreen($padded),
-            $state === 'Code Review' || $state === 'To Verify' => Ansi::cyan($padded),
+            in_array($state, ['Blocked'], true) => Ansi::red($padded),
+            in_array($state, ['New', 'Submitted', 'Open', 'To Verify'], true) => Ansi::lwhite($padded),
+            in_array($state, ['Scheduled', 'Sprint Scheduled'], true) => Ansi::lyellow($padded),
+            in_array($state, ['In-progress'], true) => Ansi::lgreen($padded),
+            in_array($state, ['Code Review'], true) => Ansi::lcyan($padded),
+            in_array($state, ['In QA', 'Ready for QA'], true) => Ansi::cyan($padded),
             in_array($state, ['Done', 'Solved', 'Closed', 'Merged', 'Released', 'Verified', "Won't Fix", 'Duplicate', 'Cancelled'], true) => Ansi::lblack($padded),
             default => $padded,
         };
@@ -195,12 +218,13 @@ final class Format
     public static function statePriority(string $state): int
     {
         return match (true) {
-            $state === 'Blocked' => 1,
-            $state === 'In-progress' => 2,
-            in_array($state, ['Code Review', 'Sprint Scheduled', 'To Verify'], true) => 3,
-            in_array($state, ['Refinement', 'Reopened'], true) => 4,
-            in_array($state, ['New', 'Submitted', 'Open'], true) => 5,
-            in_array($state, ['Done', 'Solved', 'Closed', 'Merged', 'Released', 'Verified', "Won't Fix", 'Duplicate', 'Cancelled'], true) => 6,
+            in_array($state, ['Blocked'], true) => 1,
+            in_array($state, ['Code Review'], true) => 2,
+            in_array($state, ['In-progress'], true) => 3,
+            in_array($state, ['Sprint Scheduled'], true) => 4,
+            in_array($state, ['Refinement', 'Reopened', 'Incomplete', 'To Verify'], true) => 5,
+            in_array($state, ['New', 'Submitted', 'Open'], true) => 6,
+            in_array($state, ['Done', 'Solved', 'Closed', 'Merged', 'Released', 'Verified', "Won't Fix", 'Duplicate', 'Cancelled'], true) => 7,
             default => 0,
         };
     }

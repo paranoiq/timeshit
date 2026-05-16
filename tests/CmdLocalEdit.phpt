@@ -168,7 +168,7 @@ $app->run(['ts', 'track', 'ABC-1']);
 $snapshot = $store->load();
 $io->clear();
 Assert::same(1, $app->run(['ts', 'after', '30m']));
-Assert::contains('last record is open', $io->getErr());
+Assert::contains('last entry is open', $io->getErr());
 Assert::equal($snapshot, $store->load());
 
 
@@ -324,4 +324,4 @@ Assert::same('2026-05-09 11:15', $items[0]->endedAt);
 $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
 Assert::same(1, $app->run(['ts', 'at', '#99', '09:30']));
-Assert::contains('record #99 not found', $io->getErr());
+Assert::contains('entry #99 not found', $io->getErr());

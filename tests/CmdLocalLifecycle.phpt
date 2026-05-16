@@ -185,7 +185,7 @@ Assert::null($items[2]->endedAt);
 // 17. resume with no records errors
 [$app, , , $io] = newApp();
 Assert::same(1, $app->run(['ts', 'resume']));
-Assert::contains('no record to resume', $io->getErr());
+Assert::contains('no entry to resume', $io->getErr());
 
 // 18. resume errors only when the latest open record is a tracking record;
 //     an open *untracked* break record is not an error (resume closes it).
@@ -193,7 +193,7 @@ Assert::contains('no record to resume', $io->getErr());
 $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
 Assert::same(1, $app->run(['ts', 'resume']));
-Assert::contains('a record is already open', $io->getErr());
+Assert::contains('an entry is already open', $io->getErr());
 
 // 20. double pause is a silent no-op (already paused — same untracked shape, store sees match)
 [$app, $store, $clock] = newApp('2026-05-09 10:00');

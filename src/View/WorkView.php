@@ -63,7 +63,7 @@ final class WorkView
 
             if ($weekKey !== $currentWeek) {
                 $weekColor = $weekTotal[$weekKey] >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
-                echo "\n" . $weekColor(sprintf('%-16s', $weekKey)) . '  ' . Format::spent($weekTotal[$weekKey], $weekColor) . "\n";
+                echo "\n" . $weekColor(sprintf('%-18s', $weekKey)) . '  ' . Format::spent($weekTotal[$weekKey], $weekColor) . "\n";
                 $currentWeek = $weekKey;
             }
 
@@ -75,7 +75,7 @@ final class WorkView
                 default => Ansi::red(...),
             };
             $dayLabel = $dt->format('l j.n.');
-            echo '  ' . $dayColor(sprintf('%-14s', $dayLabel)) . '  ' . Format::spent($dayMinutes, $dayColor) . "\n";
+            echo '  ' . $dayColor(sprintf('%-16s', $dayLabel)) . '  ' . Format::spent($dayMinutes, $dayColor) . "\n";
 
             foreach ($itemsByDate[$date] ?? [] as $idx) {
                 $item = $workItems[$idx];
@@ -84,7 +84,8 @@ final class WorkView
                 $title = self::pad(mb_strimwidth($titleByIssueId[$item->issueId] ?? '', 0, 50, '…'), 50);
                 $text = $item->text === '' ? '' : '  ' . Ansi::lblack($item->text);
                 echo sprintf(
-                    "    %s  %s  %s  %s%s\n",
+                    "    %s %s  %s  %s  %s%s\n",
+                    Ansi::lgreen('●'),
                     Ansi::link($url, sprintf('%-12s', $item->issueId)),
                     Format::spent($item->minutes),
                     $type,
