@@ -3,8 +3,10 @@
 use Timeshit\App;
 use Timeshit\Config;
 use Timeshit\Configurator;
+use Timeshit\CustomCommand;
 use Timeshit\Local\InMemoryRecordStore;
 use Timeshit\Local\Record;
+use Timeshit\LocalServer;
 use Timeshit\Util\BufferedIo;
 use Timeshit\Util\FixedClock;
 use Timeshit\Youtrack\StubIssueDataProvider;
@@ -39,19 +41,31 @@ function newApp(
         typeAliases: [],
         defaultTrackType: 'Implementation',
         defaultDayType: 'Out of office',
+        defaultDayIssue: 'SW-5070',
         interruptionTypes: ['Communication, Meetings, ...', 'Test / Review'],
-        defaultMeetingType: 'Communication, Meetings, ...',
-        defaultMeetingIssue: 'SW-4002',
-        defaultMailType: 'Communication, Meetings, ...',
-        defaultMailIssue: 'SW-4002',
-        defaultReviewType: 'Test / Review',
-        defaultTestType: 'Test / Review',
-        defaultImplementType: 'Implementation',
-        defaultAnalyseType: 'Analyses / Design',
-        defaultDesignType: 'Analyses / Design',
-        defaultOutOfOfficeType: 'Out of office',
-        defaultOutOfOfficeIssue: 'SW-5070',
+        customCommands: [
+            new CustomCommand(name: 'analyse',   parent: 'track',     type: 'Analyses / Design',            issue: ''),
+            new CustomCommand(name: 'implement', parent: 'track',     type: 'Implementation',               issue: ''),
+            new CustomCommand(name: 'review',    parent: 'track',     type: 'Test / Review',                issue: ''),
+            new CustomCommand(name: 'meeting',   parent: 'interrupt', type: 'Communication, Meetings, ...', issue: 'SW-4002'),
+            new CustomCommand(name: 'mail',      parent: 'interrupt', type: 'Communication, Meetings, ...', issue: 'SW-4002'),
+            new CustomCommand(name: 'standup',   parent: 'interrupt', type: 'Communication, Meetings, ...', issue: 'SW-4002', note: 'daily standup'),
+            new CustomCommand(name: 'lunchput',  parent: 'put',       type: 'Implementation',               issue: 'SW-9999', span: '1h'),
+            new CustomCommand(name: 'sickday',   parent: 'days',      type: 'Out of office',                issue: 'SW-5070', day: 'today'),
+            new CustomCommand(name: 'vacation',  parent: 'days',      type: 'Out of office'),
+            new CustomCommand(name: 'lunch',     parent: 'pause',     note: 'lunch break'),
+            new CustomCommand(name: 'review!',   parent: 'switch',    type: 'Test / Review'),
+            new CustomCommand(name: 'tea',       parent: 'skip',      span: '5m'),
+            new CustomCommand(name: 'wrap',      parent: 'end'),
+        ],
+        commandAliases: [
+            'continue' => 'resume',
+            'design'   => 'analyse',
+            'test'     => 'review',
+        ],
         editor: 'true',
+        closedIssueRetentionDays: 90,
+        port: 1985,
     );
     $store = new InMemoryRecordStore($records);
     $clock = new FixedClock($now);
@@ -71,8 +85,7 @@ function newApp(
         io: $io,
         configurator: $configurator,
         pusher: $pusher,
-        serverPidFile: __DIR__ . '/_fixtures/server.pid',
-        serverScript: __DIR__ . '/_fixtures/server.php',
+        server: new LocalServer(__DIR__ . '/_fixtures/server.pid', __DIR__ . '/_fixtures/server.php', 1985, $io),
     );
 
     return [$app, $store, $clock, $io, $pusher];

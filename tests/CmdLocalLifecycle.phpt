@@ -204,3 +204,133 @@ $snapshot = $store->load();
 $clock->advance('+5 minutes');
 Assert::same(0, $app->run(['ts', 'pause']));
 Assert::equal($snapshot, $store->load());
+
+// 21. track with a trailing quoted note sets the note on the new record
+[$app, $store] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1', 'Implementation', 'fix bug']);
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('fix bug', $items[0]->note);
+
+// 21b. note also works when type is omitted (note slot is argv[3] onwards, type defaults)
+[$app, $store] = newApp('2026-05-09 10:00');
+// User would type: ts track ABC-1 Implementation "fix the leak"
+// (note: with current parsing, the type slot must be filled to provide a note)
+$app->run(['ts', 'track', 'ABC-1', 'Implementation', 'fix the leak']);
+Assert::same('fix the leak', $store->load()[0]->note);
+
+// 22. custom command (analyse) accepts a trailing note after the issue arg
+[$app, $store] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'analyse', 'ABC-1', 'sketch the schema']);
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('Analyses / Design', $items[0]->type);
+Assert::same('sketch the schema', $items[0]->note);
+
+// 23. custom command with preset issue (meeting) takes only a note
+[$app, $store] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'meeting', 'standup with team']);
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('SW-4002', $items[0]->issueId);
+Assert::same('Communication, Meetings, ...', $items[0]->type);
+Assert::same('standup with team', $items[0]->note);
+
+// 24. custom command with a default note uses it when CLI doesn't override
+[$app, $store] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'standup']);                              // no CLI note
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('daily standup', $items[0]->note);            // default from custom command config
+// 24b. CLI note is joined with the custom command's default (default first, ` | ` separator)
+[$app, $store] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'standup', 'with infra team only']);
+Assert::same('daily standup | with infra team only', $store->load()[0]->note);
+
+// 25. custom put command (preset issue + span) writes one closed record without CLI args
+[$app, $store] = newApp('2026-05-09 14:30');
+$app->run(['ts', 'lunchput']);
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('SW-9999', $items[0]->issueId);
+Assert::same('Implementation', $items[0]->type);
+Assert::same('2026-05-09 00:00', $items[0]->startedAt);    // put starts at midnight
+Assert::same('2026-05-09 01:00', $items[0]->endedAt);      // span: 1h
+
+// 26. custom day command (preset issue + date) writes a full-day record
+[$app, $store] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'sickday']);
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('SW-5070', $items[0]->issueId);
+Assert::same('Out of office', $items[0]->type);
+Assert::same('day', $items[0]->status);
+Assert::same('2026-05-09 09:00', $items[0]->startedAt);
+
+// 27. custom pause command — pauses with the configured default note
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'lunch']);
+$items = $store->load();
+Assert::count(2, $items);
+Assert::same('paused', $items[0]->status);
+Assert::same('untracked', $items[1]->status);              // pause creates an untracked break record
+Assert::same('lunch break', $items[1]->note);              // default note from custom command
+
+// 28. custom switch command — switches type to the configured one
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+10 minutes');
+$app->run(['ts', 'review!']);
+$items = $store->load();
+Assert::count(2, $items);
+Assert::same('Implementation', $items[0]->type);
+Assert::same('Test / Review', $items[1]->type);            // switched type from custom command
+Assert::same('ABC-1', $items[1]->issueId);                 // same issue
+
+// 29. custom skip command — skips with the configured default span
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'tea']);                                  // span: 5m from custom
+$items = $store->load();
+Assert::count(2, $items);
+Assert::same('2026-05-09 10:25', $items[0]->endedAt);      // 10:30 - 5m
+Assert::same('2026-05-09 10:30', $items[1]->startedAt);
+
+// 30. custom end command — ends the current entry (no positionals, no note)
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'wrap']);
+$items = $store->load();
+Assert::count(1, $items);
+Assert::null($items[0]->endedAt === null ? null : null);    // closed
+Assert::same('2026-05-09 10:30', $items[0]->endedAt);
+
+// 31. command alias `design` resolves to custom `analyse` (records the canonical type + trigger)
+[$app, $store] = newApp('2026-05-09 10:00');
+Assert::same(0, $app->run(['ts', 'design', 'ABC-1']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('ABC-1', $items[0]->issueId);
+Assert::same('Analyses / Design', $items[0]->type);
+Assert::contains('(analyse)', $items[0]->log);             // log carries the canonical name, not the alias
+
+// 32. unique-prefix resolution works through aliases too (`des` → `design` → `analyse`)
+[$app, $store] = newApp('2026-05-09 10:00');
+Assert::same(0, $app->run(['ts', 'des', 'XYZ-2']));
+$items = $store->load();
+Assert::same('Analyses / Design', $items[0]->type);
+
+// 33. builtin alias `continue` still resolves to `resume` after the move to config
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+10 minutes');
+$app->run(['ts', 'end']);
+$clock->advance('+5 minutes');
+Assert::same(0, $app->run(['ts', 'continue']));
+$items = $store->load();
+Assert::same('ABC-1', $items[1]->issueId);                 // resumed onto a fresh ABC-1 record
+Assert::null($items[1]->endedAt);

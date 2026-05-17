@@ -331,10 +331,6 @@ final class YoutrackClient
             }
         }
 
-        $createdMs = self::asInt($issue['created'] ?? null);
-        $updatedMs = self::asInt($issue['updated'] ?? null);
-        $resolvedMs = self::asInt($issue['resolved'] ?? null);
-
         return new Issue(
             id: $id,
             title: $title,
@@ -347,9 +343,9 @@ final class YoutrackClient
             roles: $roles,
             description: self::asString($issue['description'] ?? null) ?? '',
             tags: $tags,
-            created: $createdMs === null ? 0 : intdiv($createdMs, 1000),
-            updated: $updatedMs === null ? 0 : intdiv($updatedMs, 1000),
-            resolved: $resolvedMs === null ? null : intdiv($resolvedMs, 1000),
+            created: self::formatMsTimestamp(self::asInt($issue['created'] ?? null)) ?? '',
+            updated: self::formatMsTimestamp(self::asInt($issue['updated'] ?? null)) ?? '',
+            resolved: self::formatMsTimestamp(self::asInt($issue['resolved'] ?? null)),
             customers: self::cfNames($issue, 'Customer'),
             estimation: self::cfMinutes($issue, 'Estimation') ?? 0,
         );
@@ -490,5 +486,14 @@ final class YoutrackClient
     private static function asInt(mixed $value): ?int
     {
         return is_int($value) ? $value : null;
+    }
+
+    /**
+     * Formats a YouTrack millisecond-epoch timestamp as `Y-m-d H:i` in the
+     * default timezone (set by `App::run()` from `Config::timezone`).
+     */
+    private static function formatMsTimestamp(?int $ms): ?string
+    {
+        return $ms === null ? null : date('Y-m-d H:i', intdiv($ms, 1000));
     }
 }

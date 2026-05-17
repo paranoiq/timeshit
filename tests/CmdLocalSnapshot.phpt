@@ -53,71 +53,90 @@ Assert::same(1, $app->run(['ts', 'checkout', 'ABC-1']));
 Assert::contains('missing <repo>', $io->getErr());
 
 
-// === day (full 8h record at 09:00–17:00 on a chosen date) ===
+// === days (full 8h record at 09:00–17:00 on chosen days) ===
+//
+// `days` takes 0–2 date args: 0 = today, 1 = that date, 2 = weekday range
+// (inclusive, weekends skipped). Issue + type come from defaultDayIssue /
+// defaultDayType (see bootstrap); CLI does not take an `<issue>` / `<type>` slot.
 
-// 6. day appends a closed 8h record with status='day' and a (day)-tagged log
-[$app, $store] = newApp('2026-05-09 14:30');
-Assert::same(0, $app->run(['ts', 'day', 'OOO-1', '2026-05-08']));
+// 6. days with no args logs today as a closed 8h record with defaults + (days) log
+[$app, $store] = newApp('2026-05-08 14:30');
+Assert::same(0, $app->run(['ts', 'days']));
 $items = $store->load();
 Assert::count(1, $items);
-Assert::same('OOO-1', $items[0]->issueId);
-Assert::same('Out of office', $items[0]->type);
+Assert::same('SW-5070', $items[0]->issueId);         // from defaultDayIssue
+Assert::same('Out of office', $items[0]->type);      // from defaultDayType
 Assert::same('2026-05-08 09:00', $items[0]->startedAt);
 Assert::same('2026-05-08 17:00', $items[0]->endedAt);
 Assert::same('day', $items[0]->status);
 Assert::same(
-    'created at 2026-05-08 09:00 (day) | closed at 2026-05-08 17:00 (day)',
+    'created at 2026-05-08 09:00 (days) | closed at 2026-05-08 17:00 (days)',
     $items[0]->log,
 );
 
-// 7. day with explicit type
+// 7. days <date> logs the chosen day (issue + type still come from defaults)
 [$app, $store] = newApp('2026-05-09 14:30');
-$app->run(['ts', 'day', 'ABC-1', '2026-05-08', 'doc']);
-Assert::same('Documentation', $store->load()[0]->type);
+Assert::same(0, $app->run(['ts', 'days', '2026-05-08']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('SW-5070', $items[0]->issueId);
+Assert::same('2026-05-08 09:00', $items[0]->startedAt);
 
-// 8. day refuses a second full-day on the same calendar date
+// 8. days refuses a second full-day on the same calendar date
 [$app, $store, , $io] = newApp('2026-05-09 14:30');
-$app->run(['ts', 'day', 'OOO-1', '2026-05-08']);
+$app->run(['ts', 'days', '2026-05-08']);
 $snapshot = $store->load();
 $io->clear();
-Assert::same(1, $app->run(['ts', 'day', 'XYZ-2', '2026-05-08']));
+Assert::same(1, $app->run(['ts', 'days', '2026-05-08']));
 Assert::contains('a full-day entry already exists on 2026-05-08', $io->getErr());
 Assert::equal($snapshot, $store->load());
 
-// 9. day inserts the closed record BEFORE any open record (preserves the open-is-latest invariant)
+// 9. days inserts the closed record BEFORE any open record (preserves the open-is-latest invariant)
 [$app, $store, $clock] = newApp('2026-05-09 10:00');
 $app->run(['ts', 'track', 'ABC-1']);
 $clock->advance('+30 minutes');
-$app->run(['ts', 'day', 'OOO-1', '2026-05-08']);
+$app->run(['ts', 'days', '2026-05-08']);
 $items = $store->load();
 Assert::count(2, $items);
 // day record is at index 0, open record stays at index 1 (latest)
-Assert::same('OOO-1', $items[0]->issueId);
+Assert::same('SW-5070', $items[0]->issueId);
 Assert::same('day', $items[0]->status);
 Assert::same('ABC-1', $items[1]->issueId);
 Assert::null($items[1]->endedAt);
 
-// 10. day with unusual issue id is accepted with a warning
-[$app, $store, , $io] = newApp('2026-05-09 14:30');
-Assert::same(0, $app->run(['ts', 'day', 'not-id', '2026-05-08']));
+// 9a. issue / type / note positional args after the dates (dates peeled by parsing)
+[$app, $store] = newApp('2026-05-09 14:30');
+Assert::same(0, $app->run(['ts', 'days', '2026-05-08', 'ABC-1', 'doc', 'sick', 'leave']));
 $items = $store->load();
 Assert::count(1, $items);
-Assert::same('not-id', $items[0]->issueId);
-Assert::contains('unusual issue id format', $io->getErr());
+Assert::same('ABC-1', $items[0]->issueId);
+Assert::same('Documentation', $items[0]->type);
+Assert::same('sick leave', $items[0]->note);
 
-// 10b. day with a plain integer expands it with the default prefix
-[$app, $store, , $io] = newApp('2026-05-09 14:30');
-Assert::same(0, $app->run(['ts', 'day', '7', '2026-05-08']));
+// 9b. without a leading date arg the first slot is the issue (date defaults to today)
+[$app, $store] = newApp('2026-05-08 14:30');
+Assert::same(0, $app->run(['ts', 'days', 'ABC-1']));
 $items = $store->load();
 Assert::count(1, $items);
-Assert::same('SW-7', $items[0]->issueId);
-Assert::notContains('unusual', $io->getErr());
+Assert::same('ABC-1', $items[0]->issueId);
+Assert::same('2026-05-08 09:00', $items[0]->startedAt);
+
+// 9c. two leading dates → range; remaining args become issue + type
+[$app, $store] = newApp('2026-05-04 10:00');
+Assert::same(0, $app->run(['ts', 'days', '2026-05-04', '2026-05-06', 'ABC-1', 'doc']));
+$items = $store->load();
+Assert::count(3, $items);
+foreach ($items as $r) {
+    Assert::same('ABC-1', $r->issueId);
+    Assert::same('Documentation', $r->type);
+}
 
 
-// === vacation (one 8h day per working day in [from..to] inclusive, weekends skipped) ===
+// === days <from> <to> — weekday range (inclusive, weekends skipped) ===
 //
+// Exercised via the `vacation` custom command (parent: days, type: 'Out of office').
 // Reference dates: Mon 2026-05-04, Tue 05, Wed 06, Thu 07, Fri 08, Sat 09, Sun 10, Mon 11.
-// Issue + type come from defaultOutOfOfficeIssue / defaultOutOfOfficeType (see bootstrap).
+// Log trigger is the custom command name, so entries are tagged `(vacation)`.
 
 // 10c. vacation Mon→Fri produces 5 closed 8h day records, in calendar order
 [$app, $store] = newApp('2026-05-04 12:00');
@@ -126,8 +145,8 @@ $items = $store->load();
 Assert::count(5, $items);
 $expectedDays = ['2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08'];
 foreach ($items as $i => $r) {
-    Assert::same('SW-5070', $r->issueId);            // from defaultOutOfOfficeIssue
-    Assert::same('Out of office', $r->type);         // from defaultOutOfOfficeType
+    Assert::same('SW-5070', $r->issueId);            // from defaultDayIssue
+    Assert::same('Out of office', $r->type);         // from the custom command's `type:`
     Assert::same('day', $r->status);
     Assert::same("{$expectedDays[$i]} 09:00", $r->startedAt);
     Assert::same("{$expectedDays[$i]} 17:00", $r->endedAt);
@@ -165,7 +184,7 @@ Assert::same([], $store->load());
 // 10h. vacation refuses atomically when ANY day in range already has a day record
 //      (the existing record stays untouched and no new records are written)
 [$app, $store, , $io] = newApp('2026-05-04 12:00');
-$app->run(['ts', 'day', 'OOO-1', '2026-05-06']);     // existing day on Wed
+$app->run(['ts', 'days', '2026-05-06']);             // existing day on Wed
 $snapshot = $store->load();
 $io->clear();
 Assert::same(1, $app->run(['ts', 'vacation', '2026-05-04', '2026-05-08']));
@@ -185,18 +204,28 @@ Assert::same('day', $items[2]->status);              // 2026-05-07
 Assert::same('ABC-1', $items[3]->issueId);           // open record stays last
 Assert::null($items[3]->endedAt);
 
-// 10j. missing args
-[$app, , , $io] = newApp();
-Assert::same(1, $app->run(['ts', 'vacation']));
-Assert::contains('missing <from>', $io->getErr());
-[$app, , , $io] = newApp();
-Assert::same(1, $app->run(['ts', 'vacation', '2026-05-04']));
-Assert::contains('missing <to>', $io->getErr());
+// 10j. vacation with no date args defaults to today
+//      (2026-05-04 is Monday — one record, log tagged with the custom name)
+[$app, $store] = newApp('2026-05-04 12:00');
+Assert::same(0, $app->run(['ts', 'vacation']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('SW-5070', $items[0]->issueId);
+Assert::same('2026-05-04 09:00', $items[0]->startedAt);
+Assert::contains('(vacation)', $items[0]->log);
 
 // 10k. `v` prefix resolves uniquely to vacation
 [$app, $store] = newApp('2026-05-04 12:00');
 Assert::same(0, $app->run(['ts', 'v', '2026-05-04', '2026-05-04']));
 Assert::count(1, $store->load());
+
+// 10l. vacation overrides the default issue from the CLI (type stays pre-filled)
+[$app, $store] = newApp('2026-05-04 12:00');
+Assert::same(0, $app->run(['ts', 'vacation', '2026-05-04', 'ABC-1']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('ABC-1', $items[0]->issueId);
+Assert::same('Out of office', $items[0]->type);
 
 
 // === put (closed span-long record starting at midnight; for untracked time) ===

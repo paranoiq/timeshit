@@ -14,6 +14,7 @@ require __DIR__ . '/vendor/autoload.php';
 use Timeshit\App;
 use Timeshit\Config;
 use Timeshit\Configurator;
+use Timeshit\Help;
 use Timeshit\Util\Ansi;
 use Timeshit\Util\StdIo;
 
@@ -29,7 +30,7 @@ try {
 }
 
 if ($arg === null || $arg === '' || $arg === '-h' || $arg === '--help') {
-    App::printHelp($io, $config);
+    Help::print($io, $config);
     exit(0);
 }
 

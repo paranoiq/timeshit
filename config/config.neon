@@ -1,31 +1,59 @@
-youtrackBaseUrl: https://flowbox.youtrack.cloud/
+
 timezone: Europe/Prague
 editor: nano
+port: 1985
+
+# Drop closed issues from the bulk-pulled cache once their `resolved` date is
+# older than this many days. Issues you explicitly tracked (extras) are kept
+# regardless of age. Set to 0 to disable filtering.
+closedIssueRetentionDays: 90
+
 defaultIssuePrefix: SW-
+
 allowedTypes:
-	- Analyses / Design
-	- 'Communication, Meetings, ...'
-	- Documentation
-	- Implementation
-	- Out of office
-	- Test / Review
+    - 'Analyses / Design'
+    - 'Communication, Meetings, ...'
+    - 'Documentation'
+    - 'Implementation'
+    - 'Out of office'
+    - 'Test / Review'
 typeAliases:
-	Analyses / Design: [Design]
-	'Communication, Meetings, ...': [Meeting]
-	Test / Review: [Review]
+    'Analyses / Design': [Design]
+    'Communication, Meetings, ...': [Meeting]
+    'Test / Review': [Review]
 interruptionTypes:
-	- 'Communication, Meetings, ...'
-	- Test / Review
-defaultTrackType: Implementation
-defaultDayType: Out of office
-defaultMeetingType: 'Communication, Meetings, ...'
-defaultMeetingIssue: SW-4002
-defaultMailType: 'Communication, Meetings, ...'
-defaultMailIssue: SW-4002
-defaultReviewType: Test / Review
-defaultTestType: Test / Review
-defaultImplementType: Implementation
-defaultAnalyseType: Analyses / Design
-defaultDesignType: Analyses / Design
-defaultOutOfOfficeType: Out of office
-defaultOutOfOfficeIssue: SW-5070
+    - 'Communication, Meetings, ...'
+    - 'Test / Review'
+
+defaultTrackType: 'Implementation'
+defaultDayType: 'Out of office'
+defaultDayIssue: SW-5070
+
+customCommands:
+    analyse:
+        parent: track
+        type: 'Analyses / Design'
+    implement:
+        parent: track
+        type: 'Implementation'
+    review:
+        parent: track
+        type: 'Test / Review'
+    meeting:
+        parent: interrupt
+        issue: SW-4002
+        type: 'Communication, Meetings, ...'
+    mail:
+        parent: interrupt
+        issue: SW-4002
+        type: 'Communication, Meetings, ...'
+    vacation:
+        parent: days
+        issue: SW-5070
+        type: 'Out of office'
+        note: vacation
+
+commandAliases:
+    continue: resume
+    design: analyse
+    test: review

@@ -2,6 +2,7 @@
 
 namespace Timeshit\Youtrack;
 
+use DateTimeImmutable;
 use RuntimeException;
 use Timeshit\Util\Ansi;
 use Timeshit\Util\Io;
@@ -17,6 +18,7 @@ final class CachedIssueDataProvider implements IssueDataProvider
         private readonly YoutrackClient $client,
         private readonly Io $io,
         private readonly string $youtrackBaseUrl,
+        private readonly int $closedIssueRetentionDays,
     ) {}
 
     /** @return array{user: string, issues: list<Issue>, workItems: list<WorkItem>} */
@@ -118,6 +120,19 @@ final class CachedIssueDataProvider implements IssueDataProvider
         $data = $this->client->fetchMine();
         $issues = $data['issues'];
 
+        if ($this->closedIssueRetentionDays > 0) {
+            $cutoff = (new DateTimeImmutable("-{$this->closedIssueRetentionDays} days"))->format('Y-m-d H:i');
+            [$issues, $dropped] = self::filterStaleResolved($issues, $cutoff);
+            if ($dropped > 0) {
+                $this->io->err(sprintf(
+                    "Dropped %d closed issue%s resolved before %s\n",
+                    $dropped,
+                    $dropped === 1 ? '' : 's',
+                    $cutoff,
+                ));
+            }
+        }
+
         $remainingExtraIds = [];
         foreach ($previousExtraIds as $id) {
             if (self::containsId($issues, $id)) {
@@ -173,6 +188,28 @@ final class CachedIssueDataProvider implements IssueDataProvider
         }
 
         return ['user' => $user, 'issues' => $issues, 'workItems' => $workItems];
+    }
+
+    /**
+     * Drops closed issues whose `resolved` timestamp is strictly before `$cutoff`.
+     * Compares the `'Y-m-d H:i'` strings directly — they are lexically sortable.
+     *
+     * @param list<Issue> $issues
+     * @return array{0: list<Issue>, 1: int} kept issues and count dropped
+     */
+    private static function filterStaleResolved(array $issues, string $cutoff): array
+    {
+        $kept = [];
+        $dropped = 0;
+        foreach ($issues as $issue) {
+            if ($issue->resolved !== null && $issue->resolved < $cutoff) {
+                $dropped++;
+                continue;
+            }
+            $kept[] = $issue;
+        }
+
+        return [$kept, $dropped];
     }
 
     /**

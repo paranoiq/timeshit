@@ -195,6 +195,13 @@ final class Format
         return $isMe ? Ansi::lgreen($padded) : $padded;
     }
 
+    public static function padTitle(string $title, int $width): string
+    {
+        $truncated = mb_strimwidth($title, 0, $width, '…');
+
+        return $truncated . str_repeat(' ', max(0, $width - mb_strwidth($truncated)));
+    }
+
     public static function status(string $status): string
     {
         return match ($status) {

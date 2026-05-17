@@ -47,12 +47,12 @@ Assert::same($shift(0),  $ymd(Resolver::resolveDate('TODAY')));
 Assert::exception(
     static fn() => Resolver::resolveDate('t'),
     RuntimeException::class,
-    "day: ambiguous date 't', could be: today, tomorrow",
+    "days: ambiguous date 't', could be: today, tomorrow",
 );
 Assert::exception(
     static fn() => Resolver::resolveDate('to'),
     RuntimeException::class,
-    "day: ambiguous date 'to', could be: today, tomorrow",
+    "days: ambiguous date 'to', could be: today, tomorrow",
 );
 
 // --- integer = day-of-month --------------------------------------------------

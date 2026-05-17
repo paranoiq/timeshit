@@ -27,9 +27,9 @@ final class Issue
         public readonly array $roles,
         public readonly string $description = '',
         public readonly array $tags = [],
-        public readonly int $created = 0,
-        public readonly int $updated = 0,
-        public readonly ?int $resolved = null,
+        public readonly string $created = '',
+        public readonly string $updated = '',
+        public readonly ?string $resolved = null,
         public readonly array $customers = [],
         public readonly int $estimation = 0,
     ) {}
@@ -49,9 +49,9 @@ final class Issue
             roles: self::strList($data, 'roles'),
             description: self::strOpt($data, 'description'),
             tags: self::strListOpt($data, 'tags'),
-            created: self::intOpt($data, 'created'),
-            updated: self::intOpt($data, 'updated'),
-            resolved: self::intOrNull($data, 'resolved'),
+            created: self::strOpt($data, 'created'),
+            updated: self::strOpt($data, 'updated'),
+            resolved: self::strOrNull($data, 'resolved'),
             customers: self::strListOpt($data, 'customers'),
             estimation: self::intOpt($data, 'estimation'),
         );
@@ -117,11 +117,11 @@ final class Issue
     }
 
     /** @param array<int|string, mixed> $data */
-    private static function intOrNull(array $data, string $key): ?int
+    private static function strOrNull(array $data, string $key): ?string
     {
         $value = $data[$key] ?? null;
 
-        return is_int($value) ? $value : null;
+        return is_string($value) && $value !== '' ? $value : null;
     }
 
     /**

@@ -27,7 +27,7 @@ A simple time tracker for personal use, integrated with YouTrack, GitLab, and Gi
 timeshit.php            CLI entry point; runs `composer install` if needed, then dispatches to App
 config/
   config.neon           committed — non-secret config
-  secrets.neon          gitignored — `youtrackToken` only
+  secrets.neon          gitignored — `youtrackBaseUrl` and `youtrackToken`
 src/                    flat under `Timeshit\` by default; sub-namespaces for orthogonal concerns
   App.php               CLI dispatcher; `App::run(array $argv): int`; production factory `App::forRoot()`
   Config.php            value object; `Config::load($root)` reads both NEON files
@@ -72,10 +72,10 @@ Subcommands (read `App.php` for argument shapes, error cases, and log-entry word
 
 - **Read-only:** `status`, `issues`, `time`, `archive`, `types`, `refresh`
 - **Sync:** `push [<date>]` — sum closed records by (day, issue, type) up to `<date>` (default: `yesterday`, accepts `today` to include today) and POST a work item per group; on success the records move to `data/archive.neon` with the assigned `workItemId` and `status='synced'`; on failure they stay in `data/records.neon` with `status='failed'` and a `sync failed (…)` log entry. Open records and already-`synced` records are skipped. `untracked` break records are not pushed themselves, but once any group on the same day pushes successfully they're moved to `data/archive.neon` too (status preserved, log gets `archived at <time> (push)`) so completed days drop out of `data/records.neon` entirely. `failed` records are retried on the next `push`.
-- **Track:** `track <issue> [<type>]`, `checkout <branch> <repo>` (git hook), `interrupt <issue> [<type>]`
+- **Track:** `track <issue> [<type>]`, `checkout <branch> <repo>` (git hook), `interrupt <issue> [<type>]`, plus any `customCommands` from `config.neon` (see below)
 - **Annotate / mutate the open record:** `type [#<id>] <type>`, `switch <type>`, `note [#<id>] <text>`
 - **Pause / resume / close:** `pause [<note>]`, `resume [<note>]`, `end [<note>]`, `done [<note>]`
-- **Backfill:** `day <issue> [<date>] [<type>]`, `skip <span>`, `grab <issue> <span> [<type>]`, `put <issue> <span> [<type>]`
+- **Backfill:** `days [<days>] [<issue>] [<type>] [<note>]` (zero/one/two leading date args; two = weekday range — the dispatcher peels leading args that parse as dates), `skip <span>`, `grab <issue> <span> [<type>]`, `put <issue> <span> [<type>]`
 - **Edit timestamps (with [y/N] confirm):** `at [#<id>] <time>`, `before [#<id>] <span>`, `after [#<id>] <span>`
 - **Free-form edit:** `edit <id>` — opens the record (by id) in `$config->editor` as NEON, validates and re-saves
 - **Hidden:** `configure` (also auto-triggered when `config/secrets.neon` is missing)
@@ -84,11 +84,45 @@ All CLI error output is red on STDERR via `Ansi::red`; exit code is `1`.
 
 ### Command name resolution
 
-The dispatcher resolves the subcommand the same way `<type>` and `<date>` keywords are resolved: case-insensitive exact match wins, otherwise unique case-insensitive prefix. Exact matches always win even when the name is also a prefix of another command (e.g. `ts at` runs `at`). Ambiguous prefixes error in red and print help; unknown input falls through to "Unknown command" + help. `help`, `-h`, `--help` keep their special early-return behavior.
+The dispatcher resolves the subcommand the same way `<type>` and `<date>` keywords are resolved: case-insensitive exact match wins, otherwise unique case-insensitive prefix. Exact matches always win even when the name is also a prefix of another command (e.g. `ts at` runs `at`). Ambiguous prefixes error in red and print help; unknown input falls through to "Unknown command" + help. `help`, `-h`, `--help` keep their special early-return behavior. The full pool is `Help::BUILTIN_COMMAND_NAMES` + `customCommands` names + `commandAliases` keys; after matching, an alias is translated to its canonical command before dispatch. Aliases participate in prefix uniqueness — adding alias `design` for `analyse` makes the prefix `de` ambiguous with `delete`.
+
+### Command aliases
+
+`config.neon` may declare a `commandAliases:` block — a flat map of `alias => canonical`. Each canonical must be a real builtin or custom command (no alias chains). Aliases cannot collide with builtin or custom names. After resolution, the alias is replaced by its canonical, so `ts design SW-1` dispatches as `ts analyse SW-1` and writes `(analyse)` to the log. In help, aliases render inline as `(alias: x, y)` next to the canonical's row — they don't get their own row.
+
+### Trailing `<note>` on action commands
+
+`track`, `interrupt`, `put`, `grab`, `days`, and every `customCommand` accept an optional trailing free-form `<note>`. The note occupies every argv slot AFTER the parent's fixed positional slots:
+
+- `track`/`interrupt`: positionals are argv[2]=issue, argv[3]=type; note is argv[4..N] joined with spaces.
+- `put`/`grab`: positionals are argv[2..4]; note is argv[5..N].
+- `days`: variable-length. The dispatcher peels up to two leading argv slots as dates via `Resolver::looksLikeDate`, then reads `<issue>`, `<type>`, and `<note…>` from the remaining slots. `days SW-1234` skips date peeling because `SW-1234` doesn't look like a date; `days 7 SW-1234` treats `7` as day-of-month and `SW-1234` as the issue. Custom command pre-fills (`issue:`/`type:`/`day:`) consume their slot — when set, the user cannot pass that arg on the CLI.
+- Custom commands (non-`days` parent): the slot starts after however many CLI positionals the spec did not pre-fill (`issue`, `span`).
+
+The user is expected to wrap multi-word notes in shell quotes (`ts track SW-1 Impl "fix the leak"`), but `Resolver::joinFromIndex` simply joins everything after the positional slot — so unquoted multi-word notes also work for the commands where there's no positional left to collide with (e.g. `ts meeting standup with team`).
+
+In `printHelp`, the note slot renders as `…` in light blue (`Ansi::lblue('…')`) so the signatures stay narrow. The slot is added to every action command except `days` (and to custom commands whose parent is not `days`).
+
+### Custom commands
+
+`config.neon` may declare a `customCommands` block — a map of `name => spec` where each spec has:
+
+- `parent` — any action command: `track`, `interrupt`, `put`, `grab`, `days`, `pause`, `resume` / `continue`, `done`, `end`, `switch`, `skip`. Controls the underlying behavior.
+- `type` — work-item type. Required (must be in `allowedTypes`) for parents that record a type (`track`, `interrupt`, `put`, `grab`, `days`, `switch`). Optional/ignored for parents that don't (`pause`, `done`, `end`, `resume`, `skip`).
+- `issue` — optional pre-set issue id. When set, the user does not pass `<issue>` on the CLI. Applies to record-creating parents.
+- `note` — optional default note. Always applied; when the CLI also supplies a trailing note, the two are joined with ` | ` (default first, CLI detail trailing) via `App::joinNote`. Applies to parents that take notes (`track`, `interrupt`, `put`, `grab`, `days`, `pause`, `done`, `end`).
+- `span` — optional default duration. Applies to `put`, `grab`, `skip`.
+- `day` — optional default date. Applies to `days`, pre-filling the single-day case (user passes 0 CLI date args).
+
+`App::cmdCustom(CustomCommand, $argv, $noteArg)` dispatches by parent via a switch: track/interrupt route to `startRecord`; `put`/`grab` call the matching `cmdPut`/`cmdGrab` with pre-filled args; `days` routes through `cmdDaysCli` (see `App::cmdDaysCli`), which handles its own date peeling and pre-fill consumption; `pause`/`done`/`end`/`resume`/`switch`/`skip` call their builtin counterpart with the appropriate defaults. Fields that don't apply to the parent are ignored.
+
+`App::noteStartIndex()` computes the argv slot where the trailing note begins. For customs it accounts for which positionals are pre-filled in the spec; for builtin commands it follows the parent's structure (track/interrupt=4, put/grab=5). `days` returns -1 because its date peeling is variable-length — `cmdDaysCli` extracts the note from the leftover argv slots after peeling instead.
+
+The stock commands (`analyse`, `design`, `implement`, `review`, `test`, `meeting`, `mail`, `vacation`) live in `config/config.neon` as `customCommands`, not as hardcoded methods — add or remove freely.
 
 ### Type matching
 
-Every command that takes a `<type>` argument (`track`, `day`, `type`, `switch`, `grab`, `interrupt`) resolves it through `Resolver::matchType`. The set of valid canonical names is constrained by `Config::$allowedTypes` (whitelist in `config.neon`); aliases (e.g. `Design` → `Analyses / Design`) come from `Config::$typeAliases`. Resolution: case-insensitive exact match on any candidate (canonical or alias) wins, then unique-canonical prefix match across candidates, then ambiguous-error, then unknown-error. Canonical casing from the cache is what gets written to the record.
+Every command that takes a `<type>` argument (`track`, `type`, `switch`, `grab`, `interrupt`, `days`) resolves it through `Resolver::matchType`. The set of valid canonical names is constrained by `Config::$allowedTypes` (whitelist in `config.neon`); aliases (e.g. `Design` → `Analyses / Design`) come from `Config::$typeAliases`. Resolution: case-insensitive exact match on any candidate (canonical or alias) wins, then unique-canonical prefix match across candidates, then ambiguous-error, then unknown-error. Canonical casing from the cache is what gets written to the record.
 
 `Resolver::resolveType($cmd, $input, $default, $typesLoader, $allowedNames, $aliases)` wraps the default/missing handling around `matchType` and takes a `Closure(): list<WorkItemType>` for the cache so the lookup only fires when needed (i.e. *not* when the default applies). `App` passes `$this->types->types(...)` (first-class callable).
 
@@ -115,7 +149,7 @@ Each `Record` has nine fields: `id` (auto-increment via `RecordStore::nextId()`)
 
 The **latest record is the only one allowed to be open** (`endedAt: null`). `track` and `checkout` both close any open record and append a new one in a single write.
 
-Timestamps are stored in the timezone configured in `config.neon` (`timezone: …`) and formatted as `Y-m-d H:i` (no offset, space between date and time, no seconds). `App::run()` calls `date_default_timezone_set($this->config->timezone)` once per command so every subsequent `date()` / `DateTimeImmutable` lives in that timezone — including `setTime(9, 0)` / `setTime(17, 0)` in `day`. Inside `App`, "now" goes through `Util\Clock` (`$this->clock->nowMinute()` for the canonical form, `->now()` for arithmetic), never through `date()` directly.
+Timestamps are stored in the timezone configured in `config.neon` (`timezone: …`) and formatted as `Y-m-d H:i` (no offset, space between date and time, no seconds). `App::run()` calls `date_default_timezone_set($this->config->timezone)` once per command so every subsequent `date()` / `DateTimeImmutable` lives in that timezone — including `setTime(9, 0)` / `setTime(17, 0)` in `days`. Inside `App`, "now" goes through `Util\Clock` (`$this->clock->nowMinute()` for the canonical form, `->now()` for arithmetic), never through `date()` directly.
 
 ### Status field
 
@@ -124,7 +158,7 @@ The `status` field is an enum-style string:
 - `'new'` — default; fresh record, open or closed
 - `'paused'` — closed record paused by `cmdPause` or by the interruption flow; what `done` / `resume` look at to find work to bring back
 - `'untracked'` — the *break* record produced by `pause` (no issue, no type, covers the time you're away)
-- `'day'` — full-day OOO record produced by `day` / `vacation`; skipped by `status`, `note`, `at` / `before` / `after`
+- `'day'` — full-day record produced by `days` (or any custom command on top of `days`, e.g. `vacation`); skipped by `status`, `note`, `at` / `before` / `after`
 - `'synced'` — record pushed to YouTrack — set by `push` on the moved-to-archive record (also carries `workItemId`)
 - `'failed'` — `push` attempt failed; record stays in `data/records.neon` with a `sync failed (<reason>) at <time> (push)` log entry and is retried on the next `push`
 
@@ -172,12 +206,13 @@ Or globally: `git config --global core.hooksPath /home/vlasta/dev/php/timeshit/h
 
 ## Conventions
 
-- Secrets in `config/secrets.neon` (gitignored). Non-secret config in `config/config.neon` (committed). `Config::load($root)` reads both; `Config::timezone($root)` reads only the public file.
+- Secrets in `config/secrets.neon` (gitignored — `youtrackBaseUrl`, `youtrackToken`). Non-secret config in `config/config.neon` (committed). `Config::load($root)` reads both; `Config::timezone($root)` reads only the public file. The `configure` command (auto-triggered when `secrets.neon` is missing) only writes `secrets.neon` — it never touches `config.neon`.
 - HTTP via cURL directly; no Guzzle. Same interface can later be swapped if needed. `CURLOPT_CONNECTTIMEOUT` is 1s; `CURLOPT_TIMEOUT` is 1s for `GET` (offline must fail fast) but 10s for the `push` `POST` (write may take longer server-side).
 - **Offline policy:** every command except `refresh` and `push` must keep working without a network. The cached providers (`CachedTypeProvider`, `CachedIssueDataProvider`) catch the `RuntimeException` from `YoutrackClient`, print a yellow `Offline (…); using cached …` warning on stderr, and fall back to whatever stale cache exists (or empty data). `refresh()` / `refresh` subcommand and `push` intentionally propagate the network error — `push` translates each per-group failure into `status='failed'` on the affected records rather than aborting the whole batch.
 - "Current user" in YouTrack queries is implicit via the token — we use the `me` keyword (e.g. `assignee: me`).
 - YouTrack custom field shapes vary (User / Enum / Period / …). The client returns raw decoded issues; callers extract via `Client::customFieldValue($issue, $name)` and interpret the shape themselves. Field names assumed: `State`, `Type`, `Assignee`, `Category`, `Spent time`.
 - To know *why* an issue was downloaded, the client runs one query per role (`assignee: me`, `commenter: me`, `reporter: me`, `updater: me`, `tag: Star`, `mentions: me`) plus `/api/workItems?author=me`, and merges by issue ID. Each `Issue` carries a `roles: list<string>`.
+- **Closed-issue retention:** `config.neon.closedIssueRetentionDays` (default `90`) drops closed issues from the bulk-pulled cache once their `resolved` date is older than the threshold. Applied inside `CachedIssueDataProvider::fetchAndCache` only to fresh `fetchMine` results — extras carried via `extraIds` (issues you explicitly tracked) bypass the filter so they stay regardless of age. Set to `0` to disable. Since refresh overwrites the file, this also acts as the cleanup mechanism. `Issue::$resolved` is a `Y-m-d H:i` string so the comparison is a plain lexical `<` against the cutoff string.
 
 ## Static analysis
 
@@ -212,7 +247,7 @@ Test files (read the file for the scenario list):
 - `tests/CmdLocalLifecycle.phpt` — `track` / `end` / `pause` / `resume` single-command coverage
 - `tests/CmdLocalAnnotate.phpt` — `type` / `switch` / `note`
 - `tests/CmdLocalEdit.phpt` — `at` / `before` / `after` / `skip` / `grab`
-- `tests/CmdLocalSnapshot.phpt` — `checkout` / `day` / `status`
+- `tests/CmdLocalSnapshot.phpt` — `checkout` / `days` / `status`
 - `tests/CmdLocalCombo.phpt` — multi-command flows
 - `tests/CmdLocalInterruption.phpt` — auto-pause/auto-resume flow, explicit `interrupt`, status-field lifecycle
 - `tests/CmdPush.phpt` — `push` grouping by (day, issue, type), cutoff handling (`yesterday` default, `today` opt-in, explicit date), archive vs. failed-stay-in-records, retry of `failed`, skipping of open / `untracked` / `synced` records

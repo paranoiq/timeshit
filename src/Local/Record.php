@@ -2,12 +2,16 @@
 
 namespace Timeshit\Local;
 
+use DateTimeImmutable;
+use Exception;
 use JsonSerializable;
 use RuntimeException;
 
 use function array_key_exists;
+use function intdiv;
 use function is_int;
 use function is_string;
+use function max;
 
 final class Record implements JsonSerializable
 {
@@ -20,7 +24,7 @@ final class Record implements JsonSerializable
      *                 `resume` to find work to bring back.
      * - `'untracked'` — non-issue record (e.g. the break record produced by
      *                   `pause`) — never synced to YouTrack as a work item.
-     * - `'day'`     — full-day OOO record produced by the `day` command.
+     * - `'day'`     — full-day OOO record produced by the `days` command.
      * - `'synced'`  — record was uploaded to YouTrack — placeholder.
      * - `'failed'`  — upload to YouTrack failed — placeholder.
      *
@@ -48,6 +52,21 @@ final class Record implements JsonSerializable
     public function isOpen(): bool
     {
         return $this->endedAt === null;
+    }
+
+    public function minutes(): int
+    {
+        if ($this->endedAt === null) {
+            return 0;
+        }
+        try {
+            $s = new DateTimeImmutable($this->startedAt);
+            $e = new DateTimeImmutable($this->endedAt);
+        } catch (Exception) {
+            return 0;
+        }
+
+        return max(0, intdiv($e->getTimestamp() - $s->getTimestamp(), 60));
     }
 
     public static function logCreated(string $time, string $trigger): string

@@ -43,6 +43,24 @@ final class Resolver
     }
 
     /**
+     * Joins all argv elements from `$start` onwards with a space, returning
+     * `null` when nothing trails. Used by action commands to consume the
+     * optional trailing `<note>` argument: positional args occupy fixed
+     * argv slots, and anything past them is the (free-form, optionally
+     * quoted) note.
+     *
+     * @param list<string> $argv
+     */
+    public static function joinFromIndex(array $argv, int $start): ?string
+    {
+        if (count($argv) <= $start) {
+            return null;
+        }
+
+        return implode(' ', array_slice($argv, $start));
+    }
+
+    /**
      * Peels off an optional leading `#<id>` token (literal `#` plus one or
      * more digits) from `$arg` and returns `[(int) id | null, remaining-string | null]`.
      * The id token must be separated from the rest by whitespace.
@@ -167,7 +185,40 @@ final class Resolver
         }
     }
 
-    public static function resolveDate(?string $input, string $cmd = 'day', ?DateTimeImmutable $today = null): DateTimeImmutable
+    /**
+     * Cheap "does this argv slot look like a date the user meant?" check,
+     * used by the `days` dispatcher to peel up to two leading date tokens
+     * before the issue/type/note positionals. Mirrors what `resolveDate`
+     * accepts: pure digits, a unique-or-ambiguous prefix of a keyword like
+     * `today`/`yesterday`/…, or anything `DateTimeImmutable` can parse.
+     * Ambiguous keyword prefixes (e.g. `t`) still report true so the user
+     * gets the clearer "ambiguous date" error from `resolveDate` instead of
+     * silently being treated as an issue id.
+     */
+    public static function looksLikeDate(string $arg): bool
+    {
+        if ($arg === '') {
+            return false;
+        }
+        if (preg_match('/^\d+$/', $arg) === 1) {
+            return true;
+        }
+        $needle = mb_strtolower($arg);
+        foreach (['today', 'yesterday', 'tomorrow', 'ereyesterday', 'overmorrow'] as $keyword) {
+            if (str_starts_with($keyword, $needle)) {
+                return true;
+            }
+        }
+        try {
+            new DateTimeImmutable($arg);
+
+            return true;
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    public static function resolveDate(?string $input, string $cmd = 'days', ?DateTimeImmutable $today = null): DateTimeImmutable
     {
         $today ??= new DateTimeImmutable('today');
         $original = $input === null || $input === '' ? 'today' : $input;

@@ -2,9 +2,8 @@
 todo:
 -----
 
-- spawn a http server on 1885 to listen to browser plugin/favelet/
-- show all week-days in work list. red if empty
-- status will show all paused records
+- ??? status will show all paused records
+  - better handling of resume
 - nth: split command to split the same time between two issues
 
 
