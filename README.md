@@ -3,6 +3,8 @@
 Personal time tracker for the CLI, integrating with YouTrack and Git.
 Records what you work on, groups it by issue/type, and pushes the result to YouTrack as work items.
 
+![img.png](img.png)
+
 ## Prerequisites
 
 - PHP 8.2+ with `curl`, `intl`, `json`, `mbstring`, `posix` extensions
