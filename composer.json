@@ -2,6 +2,7 @@
     "name": "paranoiq/timeshit",
     "description": "Personal time tracker integrating YouTrack, GitLab, and Git.",
     "type": "project",
+    "license": "public-domain",
     "require": {
         "php": ">=8.2",
         "ext-curl": "*",
