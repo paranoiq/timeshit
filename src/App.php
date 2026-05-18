@@ -86,7 +86,7 @@ final class App
     /** Wires the file/network-backed implementations from a project root directory. */
     public static function forRoot(string $rootDir, Config $config, Io $io): self
     {
-        $client = new YoutrackClient($config->youtrackBaseUrl, $config->youtrackToken);
+        $client = new YoutrackClient($config->youtrackBaseUrl, $config->youtrackToken, $config->stateAliases, $config->categoryAliases, $config->customerAliases);
         $types = new CachedTypeProvider(
             new WorkItemTypeCache($rootDir . self::WORK_ITEM_TYPES_FILE),
             $client,
@@ -291,7 +291,7 @@ final class App
                     || str_contains(mb_strtolower(implode(' ', $i->customers)), $needle),
             ));
         }
-        (new IssuesView($this->config->youtrackBaseUrl, $data['user']))->render($issues, $data['workItems'], $this->store->load());
+        (new IssuesView($this->config->youtrackBaseUrl, $data['user'], $this->config->issueStates, $this->config->categoryColors))->render($issues, $data['workItems'], $this->store->load());
     }
 
     private function cmdTime(?string $modifier): void
@@ -299,13 +299,13 @@ final class App
         $details = self::resolveDetailsFlag('time', $modifier);
         $data = $this->issueData->loadOrFetch();
         $records = $this->store->load();
-        (new AllView($this->config->youtrackBaseUrl))->render($data['workItems'], $records, $data['issues'], $details);
+        (new AllView($this->config->youtrackBaseUrl, $this->config->typeColors, $this->config->typeShortNames))->render($data['workItems'], $records, $data['issues'], $details);
     }
 
     private function cmdArchive(?string $modifier): void
     {
         $details = self::resolveDetailsFlag('archive', $modifier);
-        (new RecordsView($this->config->youtrackBaseUrl))->render($this->store->loadArchive(), $this->issueData->titles(), $details);
+        (new RecordsView($this->config->youtrackBaseUrl, $this->config->typeColors, $this->config->typeShortNames))->render($this->store->loadArchive(), $this->issueData->titles(), $details);
     }
 
     private static function resolveDetailsFlag(string $cmd, ?string $modifier): bool
@@ -375,8 +375,8 @@ final class App
                 default => Ansi::red(...),
             };
             $weekColor = $weekMinutes >= 40 * 60 ? Ansi::lgreen(...) : Ansi::red(...);
-            $this->io->out(Ansi::lwhite('Today') . ": " . Format::spent($todayMinutes, $todayColor, false) . "\n");
-            $this->io->out(Ansi::lwhite('Week') . ":  " . Format::spent($weekMinutes, $weekColor, false) . "\n\n");
+            $this->io->out(Ansi::lwhite('Week') . ":  " . Format::spent($weekMinutes, $weekColor) . "\n");
+            $this->io->out(Ansi::lwhite('Day') . ":   " . Format::spent($todayMinutes, $todayColor) . "\n\n");
 
             $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
             $titleByIssueId = $this->issueData->titles();
@@ -440,7 +440,7 @@ final class App
             '  %s %s  %s  %s  %s  %s',
             Ansi::link($url, $r->issueId),
             Format::recordId($r->id),
-            Format::type($r->type),
+            Format::type($r->type, $this->config->typeColors, $this->config->typeShortNames),
             $timeRange,
             Ansi::lblack('(') . $duration . Ansi::lblack(')'),
             Format::status($r->status),
@@ -596,11 +596,11 @@ final class App
                 $this->io->err(sprintf(
                     "Stopped %s as %s after %s\n",
                     $this->actionRef($stopped->issueId, $stopped->id),
-                    Format::typeInline($stopped->type),
+                    Format::typeInline($stopped->type, $this->config->typeColors, $this->config->typeShortNames),
                     Format::durationInline($stopped->startedAt, $stopped->endedAt),
                 ));
             }
-            $this->io->err(sprintf("Tracking %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($matched)));
+            $this->io->err(sprintf("Tracking %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($matched, $this->config->typeColors, $this->config->typeShortNames)));
         });
     }
 
@@ -665,7 +665,7 @@ final class App
             log: Record::logCreated($now, $trigger),
         );
         $this->store->track($next, $trigger);
-        $this->io->err(sprintf("Resumed %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($next->type)));
+        $this->io->err(sprintf("Resumed %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($next->type, $this->config->typeColors, $this->config->typeShortNames)));
     }
 
     private function cmdPause(?string $note): void
@@ -847,7 +847,7 @@ final class App
                 "Grabbed %s of %s as %s from %s between %s and %s\n",
                 Format::durationInline($splitAt, $now),
                 $this->actionRef($issueId, $grabbed->id),
-                Format::typeInline($resolvedType),
+                Format::typeInline($resolvedType, $this->config->typeColors, $this->config->typeShortNames),
                 $this->actionRef($last->issueId, $last->id),
                 substr($splitAt, 11),
                 substr($now, 11),
@@ -881,7 +881,7 @@ final class App
             $this->io->err(sprintf(
                 "Put %s as %s (%s)\n",
                 $this->actionRef($issueId, $record->id),
-                Format::typeInline($resolvedType),
+                Format::typeInline($resolvedType, $this->config->typeColors, $this->config->typeShortNames),
                 Format::durationInline($start, $end),
             ));
         });
@@ -1437,11 +1437,11 @@ final class App
                 $this->io->err(sprintf(
                     "Stopped %s as %s after %s\n",
                     $this->actionRef($stopped->issueId, $stopped->id),
-                    Format::typeInline($stopped->type),
+                    Format::typeInline($stopped->type, $this->config->typeColors, $this->config->typeShortNames),
                     Format::durationInline($stopped->startedAt, $stopped->endedAt),
                 ));
             }
-            $this->io->err(sprintf("Tracking %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($resolvedType)));
+            $this->io->err(sprintf("Tracking %s as %s\n", $this->actionRef($next->issueId, $next->id), Format::typeInline($resolvedType, $this->config->typeColors, $this->config->typeShortNames)));
             if ($next->note !== '') {
                 $this->io->err(sprintf("Note: %s\n", Ansi::lblack('"' . $next->note . '"')));
             }
@@ -1619,7 +1619,7 @@ final class App
             '  %s %s  %s  %s  %s',
             Ansi::link($url, sprintf('%-9s', $r->issueId)),
             Format::recordId($r->id),
-            Format::type($r->type),
+            Format::type($r->type, $this->config->typeColors, $this->config->typeShortNames),
             $timeRange,
             Ansi::lblack('(') . $duration . Ansi::lblack(')'),
         );
@@ -1791,7 +1791,7 @@ final class App
             Ansi::lgreen('✓'),
             sprintf('%-12s', $g['issueId']),
             Format::spent($g['minutes']),
-            Format::type($g['type']),
+            Format::type($g['type'], $this->config->typeColors, $this->config->typeShortNames),
             Format::padTitle($this->issueData->titles()[$g['issueId']] ?? '', 30),
             $workItemId,
         ));
@@ -1805,7 +1805,7 @@ final class App
             Ansi::red('✗'),
             sprintf('%-12s', $g['issueId']),
             Format::spent($g['minutes']),
-            Format::type($g['type']),
+            Format::type($g['type'], $this->config->typeColors, $this->config->typeShortNames),
             Format::padTitle($this->issueData->titles()[$g['issueId']] ?? '', 30),
             Ansi::red($reason),
         ));
@@ -1819,7 +1819,7 @@ final class App
             Ansi::lyellow('—'),
             sprintf('%-12s', $g['issueId']),
             Format::spent($g['minutes']),
-            Format::type($g['type']),
+            Format::type($g['type'], $this->config->typeColors, $this->config->typeShortNames),
             Format::padTitle($this->issueData->titles()[$g['issueId']] ?? '', 30),
             Ansi::lyellow('zero minutes'),
         ));

@@ -42,10 +42,48 @@ final class YoutrackClient
     private readonly string $baseUrl;
     private readonly string $token;
 
-    public function __construct(string $baseUrl, string $token)
-    {
+    /**
+     * Long YouTrack-side state name => canonical (short) name. Applied in
+     * {@see parseIssue()} so every `Issue` leaving the client carries the
+     * short form. Empty by default (no rewrites).
+     *
+     * @var array<string, string>
+     */
+    private readonly array $stateAliases;
+
+    /**
+     * Long YouTrack-side category name => canonical (short) name. Applied in
+     * {@see parseIssue()} alongside `stateAliases`. Empty by default.
+     *
+     * @var array<string, string>
+     */
+    private readonly array $categoryAliases;
+
+    /**
+     * Long YouTrack-side customer name => canonical (short) name. Applied
+     * per entry to the customer list in {@see parseIssue()}. Empty by default.
+     *
+     * @var array<string, string>
+     */
+    private readonly array $customerAliases;
+
+    /**
+     * @param array<string, string> $stateAliases long state name => canonical short name
+     * @param array<string, string> $categoryAliases long category name => canonical short name
+     * @param array<string, string> $customerAliases long customer name => canonical short name
+     */
+    public function __construct(
+        string $baseUrl,
+        string $token,
+        array $stateAliases = [],
+        array $categoryAliases = [],
+        array $customerAliases = [],
+    ) {
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->token = $token;
+        $this->stateAliases = $stateAliases;
+        $this->categoryAliases = $categoryAliases;
+        $this->customerAliases = $customerAliases;
     }
 
     /** @return array{login: string, fullName: string, email: string} */
@@ -77,7 +115,7 @@ final class YoutrackClient
             throw $e;
         }
 
-        return self::parseIssue($raw, []);
+        return $this->parseIssue($raw, []);
     }
 
     /**
@@ -156,7 +194,7 @@ final class YoutrackClient
 
         $issues = [];
         foreach ($byId as $entry) {
-            $issues[] = self::parseIssue($entry['data'], $entry['roles']);
+            $issues[] = $this->parseIssue($entry['data'], $entry['roles']);
         }
 
         return ['issues' => $issues, 'workItems' => $workItems];
@@ -304,7 +342,7 @@ final class YoutrackClient
      * @param array<int|string, mixed> $issue
      * @param list<string> $roles
      */
-    private static function parseIssue(array $issue, array $roles): Issue
+    private function parseIssue(array $issue, array $roles): Issue
     {
         $id = self::asString($issue['idReadable'] ?? null) ?? '?';
         $title = self::asString($issue['summary'] ?? null) ?? '';
@@ -331,13 +369,20 @@ final class YoutrackClient
             }
         }
 
+        $rawState = self::cfName($issue, 'State') ?? '-';
+        $rawCategory = self::cfName($issue, 'Category') ?? '-';
+        $customers = [];
+        foreach (self::cfNames($issue, 'Customer') as $rawCustomer) {
+            $customers[] = $this->customerAliases[$rawCustomer] ?? $rawCustomer;
+        }
+
         return new Issue(
             id: $id,
             title: $title,
             project: $project,
-            state: self::cfName($issue, 'State') ?? '-',
+            state: $this->stateAliases[$rawState] ?? $rawState,
             type: self::cfName($issue, 'Type') ?? '-',
-            category: self::cfName($issue, 'Category') ?? '-',
+            category: $this->categoryAliases[$rawCategory] ?? $rawCategory,
             assignee: self::cfUser($issue, 'Assignee') ?? '-',
             spent: self::cfMinutes($issue, 'Spent time') ?? 0,
             roles: $roles,
@@ -346,7 +391,7 @@ final class YoutrackClient
             created: self::formatMsTimestamp(self::asInt($issue['created'] ?? null)) ?? '',
             updated: self::formatMsTimestamp(self::asInt($issue['updated'] ?? null)) ?? '',
             resolved: self::formatMsTimestamp(self::asInt($issue['resolved'] ?? null)),
-            customers: self::cfNames($issue, 'Customer'),
+            customers: $customers,
             estimation: self::cfMinutes($issue, 'Estimation') ?? 0,
         );
     }

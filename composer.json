@@ -5,7 +5,6 @@
     "require": {
         "php": ">=8.2",
         "ext-curl": "*",
-        "ext-ffi": "*",
         "ext-intl": "*",
         "ext-json": "*",
         "ext-posix": "*",

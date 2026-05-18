@@ -4,6 +4,7 @@ namespace Timeshit\View;
 
 use DateTimeImmutable;
 use Timeshit\Format;
+use Timeshit\IssueState;
 use Timeshit\Local\Record;
 use Timeshit\Util\Ansi;
 use Timeshit\Youtrack\Issue;
@@ -22,9 +23,15 @@ use function usort;
 
 final class IssuesView
 {
+    /**
+     * @param array<string, IssueState> $states
+     * @param array<string, string> $categoryColors canonical category name => Ansi color name
+     */
     public function __construct(
         private readonly string $baseUrl,
         private readonly string $currentUser,
+        private readonly array $states,
+        private readonly array $categoryColors,
     ) {}
 
     /**
@@ -36,19 +43,20 @@ final class IssuesView
     {
         $baseUrl = rtrim($this->baseUrl, '/');
         $currentUser = $this->currentUser;
-        $mineActive = static function (Issue $issue) use ($currentUser): bool {
-            return $issue->assignee === $currentUser && Format::statePriority($issue->state) !== 8;
+        $states = $this->states;
+        $mineActive = static function (Issue $issue) use ($currentUser, $states): bool {
+            return $issue->assignee === $currentUser && Format::statePriority($issue->state, $states) !== 99;
         };
         usort(
             $issues,
-            static function (Issue $a, Issue $b) use ($mineActive): int {
+            static function (Issue $a, Issue $b) use ($mineActive, $states): int {
                 $aMine = $mineActive($a);
                 $bMine = $mineActive($b);
                 if ($aMine !== $bMine) {
                     return $aMine ? -1 : 1;
                 }
 
-                return Format::statePriority($a->state) <=> Format::statePriority($b->state);
+                return Format::statePriority($a->state, $states) <=> Format::statePriority($b->state, $states);
             },
         );
 
@@ -104,7 +112,7 @@ final class IssuesView
         $first = true;
         foreach ($issues as $issue) {
             $isMine = $mineActive($issue);
-            $isFinished = Format::statePriority($issue->state) === 8;
+            $isFinished = Format::statePriority($issue->state, $states) === 99;
             $needRule = false;
             if (!$first && $lastWasMine && !$isMine && !$afterMinePrinted) {
                 $needRule = true;
@@ -133,7 +141,7 @@ final class IssuesView
             $title = Ansi::link($url, $titleTrimmed);
             $visibleLen = mb_strwidth($titleTrimmed);
             if ($custText !== '') {
-                $title .= ' ' . Ansi::lblack($custText);
+                $title .= ' ' . Ansi::lblue($custText);
                 $visibleLen += $custWidth;
             }
             $title .= str_repeat(' ', max(0, 60 - $visibleLen));
@@ -141,16 +149,27 @@ final class IssuesView
                 $format,
                 Ansi::link($url, sprintf('%-8s', $issue->id)),
                 $issue->type,
-                Format::category($issue->category),
-                Format::state($issue->state),
+                Format::category($issue->category, $this->categoryColors),
+                Format::state($issue->state, $states),
                 Format::roles($issue->roles),
                 Format::assignee($issue->assignee, $this->currentUser),
-                Format::spent($mine, Ansi::lgreen(...)),
-                Format::spent($issue->spent),
+                $mine === 0 ? self::spentDash() : Format::spent($mine, Ansi::lgreen(...)),
+                $issue->spent === 0 ? self::spentDash() : Format::spent($issue->spent),
                 Format::estimation($issue->estimation),
                 $title,
                 Ansi::lblack(Ansi::link($url, $url)),
             );
         }
+    }
+
+    /**
+     * Renders a dim dash sized to the same 11-char-wide cell `Format::spent`
+     * produces in aligned mode. Applied per-column to SPENT (mine) and ALL
+     * (total) whenever that column's minutes are zero — keeps the visual
+     * focus on actually-tracked time and reads "no time logged" at a glance.
+     */
+    private static function spentDash(): string
+    {
+        return '        ' . Ansi::lblack('-') . '  ';
     }
 }

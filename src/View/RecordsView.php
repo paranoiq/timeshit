@@ -24,8 +24,14 @@ use function usort;
 
 final class RecordsView
 {
+    /**
+     * @param array<string, string> $typeColors canonical type name => Ansi color name
+     * @param array<string, string> $typeShortNames canonical type name => display short name
+     */
     public function __construct(
         private readonly string $baseUrl,
+        private readonly array $typeColors,
+        private readonly array $typeShortNames,
     ) {}
 
     /**
@@ -103,7 +109,7 @@ final class RecordsView
                     : $now;
                 $minutes = max(0, intdiv($end - $start, 60));
                 $url = $baseUrl . '/issue/' . $item->issueId;
-                $type = Format::type($item->type);
+                $type = Format::type($item->type, $this->typeColors, $this->typeShortNames);
                 $title = self::pad(mb_strimwidth($titleByIssueId[$item->issueId] ?? '', 0, 30, '…'), 30);
                 $idText = sprintf('%-12s', $item->issueId);
                 if ($item->status === 'synced') {
@@ -226,7 +232,7 @@ final class RecordsView
             foreach ($keysByDate[$date] ?? [] as $key) {
                 $g = $groups[$key];
                 $url = $baseUrl . '/issue/' . $g['issueId'];
-                $type = Format::type($g['type']);
+                $type = Format::type($g['type'], $this->typeColors, $this->typeShortNames);
                 $title = self::pad(mb_strimwidth($titleByIssueId[$g['issueId']] ?? '', 0, 30, '…'), 30);
                 $idText = sprintf('%-12s', $g['issueId']);
                 if ($g['allSynced']) {

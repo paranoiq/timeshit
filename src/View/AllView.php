@@ -32,8 +32,14 @@ use function usort;
  */
 final class AllView
 {
+    /**
+     * @param array<string, string> $typeColors canonical type name => Ansi color name
+     * @param array<string, string> $typeShortNames canonical type name => display short name
+     */
     public function __construct(
         private readonly string $baseUrl,
+        private readonly array $typeColors,
+        private readonly array $typeShortNames,
     ) {}
 
     /**
@@ -141,7 +147,7 @@ final class AllView
             foreach ($rowsByDate[$date] ?? [] as $idx) {
                 $row = $rows[$idx];
                 $url = $baseUrl . '/issue/' . $row['issueId'];
-                $type = Format::type($row['type']);
+                $type = Format::type($row['type'], $this->typeColors, $this->typeShortNames);
                 $title = self::pad(mb_strimwidth($titleByIssueId[$row['issueId']] ?? '', 0, 50, '…'), 50);
                 $textTail = $row['text'] === '' ? '' : ' ' . Ansi::lblack($row['text']);
                 $text = $row['recordId'] !== null
@@ -269,7 +275,7 @@ final class AllView
             foreach ($keysByDate[$date] ?? [] as $key) {
                 $g = $groups[$key];
                 $url = $baseUrl . '/issue/' . $g['issueId'];
-                $type = Format::type($g['type']);
+                $type = Format::type($g['type'], $this->typeColors, $this->typeShortNames);
                 $title = self::pad(mb_strimwidth($titleByIssueId[$g['issueId']] ?? '', 0, 50, '…'), 50);
                 $count = $g['count'] > 1 ? '  ' . Ansi::lblack(sprintf('×%-2d', $g['count'])) : '     ';
                 $notes = implode(' | ', $g['notes']);

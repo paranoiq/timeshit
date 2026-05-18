@@ -1,33 +1,13 @@
 
 timezone: Europe/Prague
+
 editor: nano
+
 port: 1985
 
-# Drop closed issues from the bulk-pulled cache once their `resolved` date is
-# older than this many days. Issues you explicitly tracked (extras) are kept
-# regardless of age. Set to 0 to disable filtering.
 closedIssueRetentionDays: 90
 
-defaultIssuePrefix: SW-
-
-allowedTypes:
-    - 'Analyses / Design'
-    - 'Communication, Meetings, ...'
-    - 'Documentation'
-    - 'Implementation'
-    - 'Out of office'
-    - 'Test / Review'
-typeAliases:
-    'Analyses / Design': [Design]
-    'Communication, Meetings, ...': [Meeting]
-    'Test / Review': [Review]
-interruptionTypes:
-    - 'Communication, Meetings, ...'
-    - 'Test / Review'
-
-defaultTrackType: 'Implementation'
-defaultDayType: 'Out of office'
-defaultDayIssue: SW-5070
+# -- custom commands & aliases -----------------------------------------------------------------------------------------
 
 customCommands:
     analyse:
@@ -57,3 +37,115 @@ commandAliases:
     continue: resume
     design: analyse
     test: review
+
+# -- work item types ---------------------------------------------------------------------------------------------------
+
+# types allowed in SW project work items
+allowedTypes:
+    - 'Analyses / Design'
+    - 'Communication, Meetings, ...'
+    - 'Documentation'
+    - 'Implementation'
+    - 'Out of office'
+    - 'Test / Review'
+
+# YouTrack name → alias (to match from start)
+typeAliases:
+    'Analyses / Design': [Design]
+    'Communication, Meetings, ...': [Meeting]
+    'Test / Review': [Review]
+
+# YouTrack names → color
+typeColors:
+    'Implementation':                lgreen
+    'Test / Review':                 cyan
+    'Documentation':                 blue
+    'Communication, Meetings, ...':  yellow
+    'Out of office':                 magenta
+
+# YouTrack names → short
+typeShortNames:
+    'Analyses / Design':             Analyses/Design
+    'Communication, Meetings, ...':  Communication
+    'Test / Review':                 Test/Review
+
+# types that make 'track' work like 'interrupt'
+interruptionTypes:
+    - 'Communication, Meetings, ...'
+    - 'Test / Review'
+
+defaultTrackType: 'Implementation'
+
+defaultDayType: 'Out of office'
+
+# -- issue ids ---------------------------------------------------------------------------------------------------------
+
+defaultIssuePrefix: SW-
+
+defaultDayIssue: SW-5070
+
+# -- issue categories --------------------------------------------------------------------------------------------------
+
+# YouTrack-side category name → short
+categoryAliases:
+    'Admin / Overhead / Support':   Admin
+    'Existing feature enhancement': Enhance
+    'Generic new feature':          Feature
+    'Internal tooling':             Tooling
+    'Technical debt':               Debt
+
+# Short category names → color
+categoryColors:
+    Bug:     lred
+    Debt:    lyellow
+    Tooling: lyellow
+    Feature: lgreen
+    Enhance: lgreen
+
+# -- issue states ------------------------------------------------------------------------------------------------------
+
+# YouTrack-side issue states → short
+stateAliases:
+    'Sprint Scheduled':              Scheduled
+    'QA Approved - Ready for merge': 'QA Approved'
+
+# Short issue states → priority (99 = closed) + color
+issueStates:
+    Blocked:        {priority: 1,  color: red}
+
+    'In-progress':  {priority: 2,  color: lgreen}
+
+    'Code Review':  {priority: 3,  color: lcyan}
+
+    'In QA':        {priority: 4,  color: cyan}
+    'Ready for QA': {priority: 4,  color: cyan}
+    'QA Approved':  {priority: 4,  color: cyan}
+
+    Scheduled:      {priority: 5,  color: lyellow}
+
+    Refinement:     {priority: 6,  color: lwhite}
+    Reopened:       {priority: 6,  color: lwhite}
+    Incomplete:     {priority: 6,  color: lwhite}
+    'To Verify':    {priority: 6,  color: lwhite}
+
+    New:            {priority: 7,  color: lwhite}
+    Submitted:      {priority: 7,  color: lwhite}
+    Open:           {priority: 7,  color: lwhite}
+
+    Done:           {priority: 99, color: lblack}
+    Solved:         {priority: 99, color: lblack}
+    Closed:         {priority: 99, color: lblack}
+    Merged:         {priority: 99, color: lblack}
+    Released:       {priority: 99, color: lblack}
+    Verified:       {priority: 99, color: lblack}
+    "Won't Fix":    {priority: 99, color: lblack}
+    Duplicate:      {priority: 99, color: lblack}
+    Cancelled:      {priority: 99, color: lblack}
+
+# -- customers ---------------------------------------------------------------------------------------------------------
+
+# YouTrack-side customer name → short
+customerAliases:
+    'Internal - SW Development': Internal SW
+    'Internal - QA': Internal QA
+    'Internal - Delivery': Internal Del

@@ -2,19 +2,14 @@
 
 namespace Timeshit;
 
-use Closure;
 use DateTimeImmutable;
 use Timeshit\Util\Ansi;
-use function array_keys;
-use function array_values;
 use function ceil;
-use function explode;
 use function in_array;
 use function intdiv;
 use function max;
 use function mb_strimwidth;
 use function mb_strwidth;
-use function preg_replace;
 use function sprintf;
 use function str_repeat;
 use function str_replace;
@@ -71,31 +66,24 @@ final class Format
         return self::minutesInline(max(0, intdiv($end->getTimestamp() - $start->getTimestamp(), 60)));
     }
 
-    /** Like `type`, but without truncation or padding — for inline action messages. */
-    public static function typeInline(string $type): string
+    /**
+     * Like `type`, but without truncation or padding — for inline action messages.
+     *
+     * @param array<string, string> $typeColors canonical type name => Ansi color name
+     * @param array<string, string> $typeShortNames canonical type name => display short name
+     */
+    public static function typeInline(string $type, array $typeColors, array $typeShortNames): string
     {
-        $first = self::typeFirst($type);
+        $display = $typeShortNames[$type] ?? $type;
 
-        return self::colorizeType($first, $first);
+        return self::colorizeType($type, $display, $typeColors);
     }
 
-    public static function category(string $category): string
+    /** @param array<string, string> $categoryColors canonical (short) category name => Ansi color name */
+    public static function category(string $category, array $categoryColors): string
     {
-        $shorts = [
-            'Admin / Overhead / Support' => 'Admin',
-            'Existing feature enhancement' => 'Enhance',
-            'Generic new feature' => 'Feature',
-            'Internal tooling' => 'Tooling',
-            'Technical debt' => 'Debt',
-        ];
-        $display = str_replace(array_keys($shorts), array_values($shorts), $category);
-        $padded = sprintf('%-8s', $display);
-        $color = match ($display) {
-            'Bug'                => Ansi::lred(...),
-            'Debt', 'Tooling'    => Ansi::lyellow(...),
-            'Feature', 'Enhance' => Ansi::lgreen(...),
-            default              => null,
-        };
+        $padded = sprintf('%-8s', $category);
+        $color = Ansi::byName($categoryColors[$category] ?? '');
 
         return $color === null ? $padded : $color($padded);
     }
@@ -229,96 +217,47 @@ final class Format
         };
     }
 
-    public static function type(string $type): string
+    /**
+     * @param array<string, string> $typeColors canonical type name => Ansi color name
+     * @param array<string, string> $typeShortNames canonical type name => display short name
+     */
+    public static function type(string $type, array $typeColors, array $typeShortNames): string
     {
-        $first = self::typeFirst($type);
-        $trimmed = mb_strimwidth($first, 0, 17, '…');
+        $display = $typeShortNames[$type] ?? $type;
+        $trimmed = mb_strimwidth($display, 0, 17, '…');
         $padded = $trimmed . str_repeat(' ', max(0, 17 - mb_strwidth($trimmed)));
 
-        return self::colorizeType($first, $padded);
+        return self::colorizeType($type, $padded, $typeColors);
     }
 
-    /** First comma-separated segment of a type, with slash spacing normalized. */
-    private static function typeFirst(string $type): string
+    /**
+     * Applies the type-specific color to `$label`, looking up the color by
+     * canonical `$type` name in the `typeColors` map. Types without an entry
+     * (or with `color: ''`) render uncolored.
+     *
+     * @param array<string, string> $typeColors canonical type name => Ansi color name
+     */
+    private static function colorizeType(string $type, string $label, array $typeColors): string
     {
-        $normalized = preg_replace('/\s*\/\s*/', '/', $type) ?? $type;
+        $color = Ansi::byName($typeColors[$type] ?? '');
 
-        return explode(',', $normalized)[0];
+        return $color === null ? $label : $color($label);
     }
 
-    /** Applies the type-specific color to `$label` based on the canonical first segment `$first`. */
-    private static function colorizeType(string $first, string $label): string
+    /** @param array<string, IssueState> $states */
+    public static function state(string $state, array $states): string
     {
-        return match (true) {
-            $first === 'Implementation' => Ansi::lgreen($label),
-            $first === 'Test/Review'    => Ansi::cyan($label),
-            $first === 'Documentation'  => Ansi::blue($label),
-            $first === 'Communication'  => Ansi::yellow($label),
-            $first === 'Out of office'  => Ansi::magenta($label),
-            default => $label,
-        };
-    }
-
-    public static function state(string $state): string
-    {
-        $display = match ($state) {
-            'Sprint Scheduled'              => 'Scheduled',
-            'QA Approved - Ready for merge' => 'QA Approved',
-            default                         => $state,
-        };
-        $padded = sprintf('%-12s', $display);
-        $color = self::states()[$state]['color'] ?? null;
+        $padded = sprintf('%-12s', $state);
+        $meta = $states[$state] ?? null;
+        $color = $meta !== null ? Ansi::byName($meta->color) : null;
 
         return $color === null ? $padded : $color($padded);
     }
 
-    public static function statePriority(string $state): int
+    /** @param array<string, IssueState> $states */
+    public static function statePriority(string $state, array $states): int
     {
-        return self::states()[$state]['priority'] ?? 0;
+        return isset($states[$state]) ? $states[$state]->priority : 0;
     }
 
-    /**
-     * Single source of truth for known YouTrack states. `color` is the Ansi wrapper applied by
-     * {@see state()} (null = no color); `priority` is the sort key used by {@see statePriority()}
-     * (lower = more attention; 0 = unranked / unknown).
-     *
-     * @return array<string, array{color: ?Closure, priority: int}>
-     */
-    private static function states(): array
-    {
-        return [
-            'Blocked'          => ['color' => Ansi::red(...),     'priority' => 1],
-
-            'In-progress'      => ['color' => Ansi::lgreen(...),  'priority' => 2],
-
-            'Code Review'      => ['color' => Ansi::lcyan(...),   'priority' => 3],
-
-            'In QA'            => ['color' => Ansi::cyan(...),    'priority' => 4],
-            'Ready for QA'     => ['color' => Ansi::cyan(...),    'priority' => 4],
-            'QA Approved'      => ['color' => Ansi::cyan(...),    'priority' => 4],
-            'QA Approved - Ready for merge' => ['color' => Ansi::cyan(...), 'priority' => 4],
-
-            'Sprint Scheduled' => ['color' => Ansi::lyellow(...), 'priority' => 5],
-            'Scheduled'        => ['color' => Ansi::lyellow(...), 'priority' => 5],
-
-            'Refinement'       => ['color' => Ansi::lwhite(...),  'priority' => 6],
-            'Reopened'         => ['color' => Ansi::lwhite(...),  'priority' => 6],
-            'Incomplete'       => ['color' => Ansi::lwhite(...),  'priority' => 6],
-            'To Verify'        => ['color' => Ansi::lwhite(...),  'priority' => 6],
-
-            'New'              => ['color' => Ansi::lwhite(...),  'priority' => 7],
-            'Submitted'        => ['color' => Ansi::lwhite(...),  'priority' => 7],
-            'Open'             => ['color' => Ansi::lwhite(...),  'priority' => 7],
-
-            'Done'             => ['color' => Ansi::lblack(...),  'priority' => 8],
-            'Solved'           => ['color' => Ansi::lblack(...),  'priority' => 8],
-            'Closed'           => ['color' => Ansi::lblack(...),  'priority' => 8],
-            'Merged'           => ['color' => Ansi::lblack(...),  'priority' => 8],
-            'Released'         => ['color' => Ansi::lblack(...),  'priority' => 8],
-            'Verified'         => ['color' => Ansi::lblack(...),  'priority' => 8],
-            "Won't Fix"        => ['color' => Ansi::lblack(...),  'priority' => 8],
-            'Duplicate'        => ['color' => Ansi::lblack(...),  'priority' => 8],
-            'Cancelled'        => ['color' => Ansi::lblack(...),  'priority' => 8],
-        ];
-    }
 }
