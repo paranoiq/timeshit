@@ -91,6 +91,35 @@ Assert::same(1, $app->run(['ts', 'track', 'ABC-1', 'nonsense']));
 Assert::same([], $store->load());
 Assert::contains("unknown type 'nonsense'", $io->getErr());
 
+// 9a. issue-id shortcut: `ts <issue>` dispatches as `ts track <issue>`
+[$app, $store] = newApp('2026-05-09 10:00');
+Assert::same(0, $app->run(['ts', 'ABC-1']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('ABC-1', $items[0]->issueId);
+Assert::same('Implementation', $items[0]->type);
+Assert::same('created at 2026-05-09 10:00 (track)', $items[0]->log);
+
+// 9b. shortcut also accepts type and note positionals
+[$app, $store] = newApp('2026-05-09 10:00');
+Assert::same(0, $app->run(['ts', 'ABC-1', 'doc', 'fix bug']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('ABC-1', $items[0]->issueId);
+Assert::same('Documentation', $items[0]->type);
+Assert::same('fix bug', $items[0]->note);
+
+// 9c. shortcut expands plain integers with the default prefix
+[$app, $store] = newApp();
+Assert::same(0, $app->run(['ts', '42']));
+Assert::same('SW-42', $store->load()[0]->issueId);
+
+// 9d. non-issue-id input still errors as unknown command
+[$app, $store, , $io] = newApp();
+Assert::same(1, $app->run(['ts', 'not-an-id']));
+Assert::same([], $store->load());
+Assert::contains('Unknown command', $io->getErr());
+
 
 // === end ===
 

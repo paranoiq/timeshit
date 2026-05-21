@@ -172,6 +172,56 @@ Assert::contains('last entry is open', $io->getErr());
 Assert::equal($snapshot, $store->load());
 
 
+// === fit (move open record's start to the previous record's end) ===
+
+// 12a. fit moves the open record's startedAt to the previous record's endedAt
+[$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'end']); // ABC-1 closes at 10:30
+$clock->advance('+15 minutes');
+$app->run(['ts', 'track', 'XYZ-2']); // XYZ-2 opens at 10:45 — 15m gap after ABC-1
+$io->setInputs(['y']);
+Assert::same(0, $app->run(['ts', 'fit']));
+$items = $store->load();
+Assert::count(2, $items);
+Assert::same('2026-05-09 10:30', $items[0]->endedAt);
+Assert::same('2026-05-09 10:30', $items[1]->startedAt);
+Assert::contains(
+    'edited startedAt from 2026-05-09 10:45 to 2026-05-09 10:30 at 2026-05-09 10:45 (fit)',
+    $items[1]->log,
+);
+
+// 12b. fit is a no-op when the open record's start already matches the previous end
+[$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'track', 'XYZ-2']); // closes ABC-1 at 10:30, opens XYZ-2 at 10:30
+$snapshot = $store->load();
+Assert::same(0, $app->run(['ts', 'fit']));
+Assert::equal($snapshot, $store->load());
+Assert::contains('No change.', $io->getErr());
+
+// 12c. fit errors when there is no open entry
+[$app, $store, , $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$app->run(['ts', 'end']);
+$snapshot = $store->load();
+$io->clear();
+Assert::same(1, $app->run(['ts', 'fit']));
+Assert::contains('no open entry to fit', $io->getErr());
+Assert::equal($snapshot, $store->load());
+
+// 12d. fit errors when there is no previous entry
+[$app, $store, , $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$snapshot = $store->load();
+$io->clear();
+Assert::same(1, $app->run(['ts', 'fit']));
+Assert::contains('no previous entry', $io->getErr());
+Assert::equal($snapshot, $store->load());
+
+
 // === skip (close at now-span, immediately reopen at now) ===
 
 // 13. skip closes the open record at now-span and opens a clone at now

@@ -109,6 +109,17 @@ final class Resolver
     }
 
     /**
+     * Whether the input looks like an issue id the dispatcher can turn into
+     * a `track` shortcut: pure digits (will be expanded with the default
+     * prefix) or the standard `ABC-123` form.
+     */
+    public static function looksLikeIssueId(string $input): bool
+    {
+        return preg_match('/^\d+$/', $input) === 1
+            || preg_match('/^[A-Za-z]+-\d+$/', $input) === 1;
+    }
+
+    /**
      * Pulls the YouTrack-style issue id out of a git branch name. Matches
      * `ABC-123…` at the start of the branch. If the branch starts with bare
      * digits and `$defaultPrefix` is non-empty, the prefix is prepended

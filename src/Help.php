@@ -18,10 +18,10 @@ use function str_starts_with;
 final class Help
 {
     public const BUILTIN_COMMAND_NAMES = [
-        'status', 'issues', 'time', 'archive',
+        'status', 'issues', 'time', 'archive', 'flow',
         'track', 'interrupt', 'days', 'type', 'switch',
         'pause', 'resume', 'skip', 'grab', 'put', 'end', 'done',
-        'at', 'before', 'after', 'note', 'edit', 'delete',
+        'at', 'before', 'after', 'fit', 'note', 'fix', 'edit', 'delete',
         'refresh', 'push',
         'checkout', 'server',
         'help',
@@ -38,8 +38,8 @@ final class Help
         'pause', 'resume', 'end', 'done',
         'type', 'switch', 'note',
         'days', 'skip', 'grab', 'put',
-        'at', 'before', 'after',
-        'edit', 'delete',
+        'at', 'before', 'after', 'fit',
+        'fix', 'edit', 'delete',
         'push',
     ];
 
@@ -104,6 +104,7 @@ final class Help
                 [$cmd('issues'),   $opt('search'), 'List ' . $app('YouTrack') . ' issues you are involved in (cached for 24h)' . $aliasHint('issues')],
                 [$cmd('time'),     Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List time entries from ' . $app('YouTrack') . ' and local entries, grouped by day/issue/type (or raw with ' . $flag('details') . ')' . $aliasHint('time')],
                 [$cmd('archive'),  Ansi::lblack('[') . $flag('details') . Ansi::lblack(']'), 'List archived (already pushed) locally entries' . $aliasHint('archive')],
+                [$cmd('flow'),     '', 'Show a horizontal timeline of the current week (4 min/char)' . $aliasHint('flow')],
                 //[$cmd('types'),    '', 'List the ' . $app('YouTrack') . ' work-item types (cached for 24h)'],
             ],
             'Actions' => self::buildActionsHelp($config, $cmd, $req, $opt, $val, $aliasHint),
@@ -111,8 +112,10 @@ final class Help
                 [$cmd('at'),       $opt('id') . ' ' . $req('time'), 'Set the start time (open entry) or end time (closed entry) of the last entry (or ' . $req('id') . ')' . $aliasHint('at')],
                 [$cmd('before'),   $opt('id') . ' ' . $req('span'), 'Move the start (open) or end (closed) of the last (or ' . $req('id') . ') entry earlier by ' . $req('span') . $aliasHint('before')],
                 [$cmd('after'),    $opt('id') . ' ' . $req('span'), 'Move the end of the last closed (or ' . $req('id') . ') entry later by ' . $req('span') . $aliasHint('after')],
+                [$cmd('fit'),      '', 'Move the start of the open entry to match the end of the previous entry' . $aliasHint('fit')],
                 [$cmd('type'),     $opt('id') . ' ' . $req('type'), 'Change the type of the current entry (or ' . $req('id') . ')' . $aliasHint('type')],
                 [$cmd('note'),     $opt('id') . ' ' . $req('note'), 'Add a note to the current entry (or ' . $req('id') . ')' . $aliasHint('note')],
+                [$cmd('fix'),      $opt('id') . ' ' . $req('issue'), 'Change the ' . $req('issue') . ' of the current entry (or ' . $req('id') . ')' . $aliasHint('fix')],
                 [$cmd('edit'),     $req('id'),   'Open entry ' . $req('id') . ' in the configured ' . Ansi::lyellow('editor') . ' for free-form editing' . $aliasHint('edit')],
                 [$cmd('delete'),   $req('id'),   'Delete entry ' . $req('id') . $aliasHint('delete')],
             ],

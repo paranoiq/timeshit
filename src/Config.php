@@ -60,6 +60,9 @@ final class Config
         public readonly string $editor,
         public readonly int $closedIssueRetentionDays,
         public readonly int $port,
+        public readonly bool $notifyStdout,
+        public readonly bool $notifyDesktop,
+        public readonly int $notificationCooldownMinutes,
         public readonly array $customCommandWarnings = [],
     ) {}
 
@@ -100,6 +103,9 @@ final class Config
             $cfg['editor'],
             $cfg['closedIssueRetentionDays'],
             $cfg['port'],
+            $cfg['notifyStdout'],
+            $cfg['notifyDesktop'],
+            $cfg['notificationCooldownMinutes'],
             $cfg['customCommandWarnings'],
         );
     }
@@ -114,7 +120,7 @@ final class Config
         return self::readConfig($rootDir)['timezone'];
     }
 
-    /** @return array{timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, typeAliases: array<string, list<string>>, defaultTrackType: string, defaultDayType: string, defaultDayIssue: string, interruptionTypes: list<string>, customCommands: list<CustomCommand>, commandAliases: array<string, string>, issueStates: array<string, IssueState>, stateAliases: array<string, string>, typeColors: array<string, string>, typeShortNames: array<string, string>, categoryColors: array<string, string>, categoryAliases: array<string, string>, customerAliases: array<string, string>, customCommandWarnings: list<string>, editor: string, closedIssueRetentionDays: int, port: int} */
+    /** @return array{timezone: string, defaultIssuePrefix: string, allowedTypes: list<string>, typeAliases: array<string, list<string>>, defaultTrackType: string, defaultDayType: string, defaultDayIssue: string, interruptionTypes: list<string>, customCommands: list<CustomCommand>, commandAliases: array<string, string>, issueStates: array<string, IssueState>, stateAliases: array<string, string>, typeColors: array<string, string>, typeShortNames: array<string, string>, categoryColors: array<string, string>, categoryAliases: array<string, string>, customerAliases: array<string, string>, customCommandWarnings: list<string>, editor: string, closedIssueRetentionDays: int, port: int, notifyStdout: bool, notifyDesktop: bool, notificationCooldownMinutes: int} */
     private static function readConfig(string $rootDir): array
     {
         $path = $rootDir . self::CONFIG_FILE;
@@ -172,6 +178,18 @@ final class Config
         if (!is_int($port) || $port < 1 || $port > 65535) {
             throw new RuntimeException("Invalid port in {$path} (expected int in 1..65535)");
         }
+        $notifyStdout = $data['notifyStdout'] ?? true;
+        if (!is_bool($notifyStdout)) {
+            throw new RuntimeException("Invalid notifyStdout in {$path} (expected bool)");
+        }
+        $notifyDesktop = $data['notifyDesktop'] ?? false;
+        if (!is_bool($notifyDesktop)) {
+            throw new RuntimeException("Invalid notifyDesktop in {$path} (expected bool)");
+        }
+        $notificationCooldownMinutes = $data['notificationCooldownMinutes'] ?? 60;
+        if (!is_int($notificationCooldownMinutes) || $notificationCooldownMinutes < 0) {
+            throw new RuntimeException("Invalid notificationCooldownMinutes in {$path} (expected non-negative int; 0 = always check)");
+        }
 
         return [
             'timezone' => $timezone,
@@ -195,6 +213,9 @@ final class Config
             'editor' => $editor,
             'closedIssueRetentionDays' => $closedIssueRetentionDays,
             'port' => $port,
+            'notifyStdout' => $notifyStdout,
+            'notifyDesktop' => $notifyDesktop,
+            'notificationCooldownMinutes' => $notificationCooldownMinutes,
         ];
     }
 

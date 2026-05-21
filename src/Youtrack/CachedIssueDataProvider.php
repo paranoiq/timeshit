@@ -6,6 +6,8 @@ use DateTimeImmutable;
 use RuntimeException;
 use Timeshit\Util\Ansi;
 use Timeshit\Util\Io;
+use function array_diff;
+use function array_values;
 use function count;
 use function in_array;
 use function sprintf;
@@ -58,11 +60,13 @@ final class CachedIssueDataProvider implements IssueDataProvider
     {
         $issues = [];
         $extraIds = [];
+        $droppedIds = [];
         $user = '';
         if ($this->issueCache->exists()) {
             $data = $this->issueCache->load();
             $issues = $data['issues'];
             $extraIds = $data['extraIds'];
+            $droppedIds = $data['droppedIds'];
             $user = $data['user'];
         }
         foreach ($issues as $existing) {
@@ -75,18 +79,18 @@ final class CachedIssueDataProvider implements IssueDataProvider
             $fetched = $this->client->fetchIssue($issueId);
         } catch (RuntimeException $e) {
             $this->io->err(Ansi::lyellow("Offline ({$e->getMessage()}); '{$issueId}' will be fetched on next refresh") . "\n");
-            $this->issueCache->save($user, $issues, $extraIds);
+            $this->issueCache->save($user, $issues, $extraIds, $droppedIds);
 
             return;
         }
         if ($fetched === null) {
             $this->io->err(Ansi::lyellow("YouTrack reports '{$issueId}' does not exist") . "\n");
-            $this->issueCache->save($user, $issues, $extraIds);
+            $this->issueCache->save($user, $issues, $extraIds, $droppedIds);
 
             return;
         }
         $issues[] = $fetched;
-        $this->issueCache->save($user, $issues, $extraIds);
+        $this->issueCache->save($user, $issues, $extraIds, $droppedIds);
     }
 
     /** @return array<string, string> */
@@ -115,19 +119,28 @@ final class CachedIssueDataProvider implements IssueDataProvider
             $me['login'],
         ));
 
-        $previousExtraIds = $this->issueCache->exists() ? $this->issueCache->load()['extraIds'] : [];
+        $previousExtraIds = [];
+        $previousDroppedIds = [];
+        if ($this->issueCache->exists()) {
+            $previous = $this->issueCache->load();
+            $previousExtraIds = $previous['extraIds'];
+            $previousDroppedIds = $previous['droppedIds'];
+        }
 
         $data = $this->client->fetchMine();
         $issues = $data['issues'];
 
+        $droppedIds = [];
         if ($this->closedIssueRetentionDays > 0) {
             $cutoff = (new DateTimeImmutable("-{$this->closedIssueRetentionDays} days"))->format('Y-m-d H:i');
-            [$issues, $dropped] = self::filterStaleResolved($issues, $cutoff);
-            if ($dropped > 0) {
+            [$issues, $droppedIds] = self::filterStaleResolved($issues, $cutoff);
+            $newlyDropped = array_values(array_diff($droppedIds, $previousDroppedIds));
+            if ($newlyDropped !== []) {
+                $count = count($newlyDropped);
                 $this->io->err(sprintf(
                     "Dropped %d closed issue%s resolved before %s\n",
-                    $dropped,
-                    $dropped === 1 ? '' : 's',
+                    $count,
+                    $count === 1 ? '' : 's',
                     $cutoff,
                 ));
             }
@@ -153,7 +166,7 @@ final class CachedIssueDataProvider implements IssueDataProvider
             $remainingExtraIds[] = $id;
         }
 
-        $this->issueCache->save($me['login'], $issues, $remainingExtraIds);
+        $this->issueCache->save($me['login'], $issues, $remainingExtraIds, $droppedIds);
         $this->workItemCache->save($me['login'], $data['workItems']);
         $this->io->err(sprintf(
             "Cached %d issues and %d work items\n",
@@ -195,21 +208,21 @@ final class CachedIssueDataProvider implements IssueDataProvider
      * Compares the `'Y-m-d H:i'` strings directly — they are lexically sortable.
      *
      * @param list<Issue> $issues
-     * @return array{0: list<Issue>, 1: int} kept issues and count dropped
+     * @return array{0: list<Issue>, 1: list<string>} kept issues and dropped ids
      */
     private static function filterStaleResolved(array $issues, string $cutoff): array
     {
         $kept = [];
-        $dropped = 0;
+        $droppedIds = [];
         foreach ($issues as $issue) {
             if ($issue->resolved !== null && $issue->resolved < $cutoff) {
-                $dropped++;
+                $droppedIds[] = $issue->id;
                 continue;
             }
             $kept[] = $issue;
         }
 
-        return [$kept, $dropped];
+        return [$kept, $droppedIds];
     }
 
     /**

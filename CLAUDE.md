@@ -73,10 +73,10 @@ Subcommands (read `App.php` for argument shapes, error cases, and log-entry word
 - **Read-only:** `status`, `issues`, `time`, `archive`, `types`, `refresh`
 - **Sync:** `push [<date>]` — sum closed records by (day, issue, type) up to `<date>` (default: `yesterday`, accepts `today` to include today) and POST a work item per group; on success the records move to `data/archive.neon` with the assigned `workItemId` and `status='synced'`; on failure they stay in `data/records.neon` with `status='failed'` and a `sync failed (…)` log entry. Open records and already-`synced` records are skipped. `untracked` break records are not pushed themselves, but once any group on the same day pushes successfully they're moved to `data/archive.neon` too (status preserved, log gets `archived at <time> (push)`) so completed days drop out of `data/records.neon` entirely. `failed` records are retried on the next `push`.
 - **Track:** `track <issue> [<type>]`, `checkout <branch> <repo>` (git hook), `interrupt <issue> [<type>]`, plus any `customCommands` from `config.neon` (see below)
-- **Annotate / mutate the open record:** `type [#<id>] <type>`, `switch <type>`, `note [#<id>] <text>`
+- **Annotate / mutate the current record:** `type [#<id>] <type>`, `switch <type>`, `note [#<id>] <text>`, `fix [#<id>] <issue>` (rewrites the issue id; refuses `untracked` break records). `type` / `note` / `fix` default to the latest non-`day` record (open or closed), so they also work after `end`; `switch` requires an open record.
 - **Pause / resume / close:** `pause [<note>]`, `resume [<note>]`, `end [<note>]`, `done [<note>]`
 - **Backfill:** `days [<days>] [<issue>] [<type>] [<note>]` (zero/one/two leading date args; two = weekday range — the dispatcher peels leading args that parse as dates), `skip <span>`, `grab <issue> <span> [<type>]`, `put <issue> <span> [<type>]`
-- **Edit timestamps (with [y/N] confirm):** `at [#<id>] <time>`, `before [#<id>] <span>`, `after [#<id>] <span>`
+- **Edit timestamps (with [y/N] confirm):** `at [#<id>] <time>`, `before [#<id>] <span>`, `after [#<id>] <span>`, `fit` (snap the open record's start to the previous record's end)
 - **Free-form edit:** `edit <id>` — opens the record (by id) in `$config->editor` as NEON, validates and re-saves
 - **Hidden:** `configure` (also auto-triggered when `config/secrets.neon` is missing)
 
@@ -85,6 +85,8 @@ All CLI error output is red on STDERR via `Ansi::red`; exit code is `1`.
 ### Command name resolution
 
 The dispatcher resolves the subcommand the same way `<type>` and `<date>` keywords are resolved: case-insensitive exact match wins, otherwise unique case-insensitive prefix. Exact matches always win even when the name is also a prefix of another command (e.g. `ts at` runs `at`). Ambiguous prefixes error in red and print help; unknown input falls through to "Unknown command" + help. `help`, `-h`, `--help` keep their special early-return behavior. The full pool is `Help::BUILTIN_COMMAND_NAMES` + `customCommands` names + `commandAliases` keys; after matching, an alias is translated to its canonical command before dispatch. Aliases participate in prefix uniqueness — adding alias `design` for `analyse` makes the prefix `de` ambiguous with `delete`.
+
+**Issue-id shortcut:** when no command matches but the first arg looks like an issue id (pure digits like `42` or standard `ABC-123` form, via `Resolver::looksLikeIssueId`), the dispatcher splices `track` into `argv` and dispatches as `ts track <issue> [<type>] [<note>…]`. The log entry reads `(track)` — the shortcut is indistinguishable from explicit `track` once recorded. Inputs that don't match the issue-id shape still error as "Unknown command", so typos like `ts trakc` aren't silently accepted as an issue.
 
 ### Command aliases
 
@@ -136,7 +138,7 @@ When `at` / `before` shifts the open record's `startedAt` and the immediately-pr
 
 ### Edit-by-id targeting
 
-`at`, `before`, `after`, `type`, `note` accept an optional leading `#<id>` token that picks the record to edit instead of using the default "last non-day record" / "open record". `Resolver::peelRecordId` parses the token; the rest of the argv (joined by spaces, like `note`) is the command's normal argument. `day`-status records are refused. The default-when-missing behavior is unchanged: `type` / `note` go through `RecordStore::changeOpenType` / `noteLast`; `at` / `before` / `after` scan backwards for the last non-day record.
+`at`, `before`, `after`, `type`, `note`, `fix` accept an optional leading `#<id>` token that picks the record to edit instead of using the default "last non-day record" / "open record". `Resolver::peelRecordId` parses the token; the rest of the argv (joined by spaces, like `note`) is the command's normal argument. `day`-status records are refused. The default-when-missing behavior is unchanged: `type` / `note` go through `RecordStore::changeLastType` / `noteLast`; `at` / `before` / `after` scan backwards for the last non-day record. `changeLastType` also skips `untracked` break records so `type` during a pause targets the real record behind the break; `noteLast` does not (a note on the break is meaningful).
 
 ## Local tracking
 
@@ -246,7 +248,7 @@ Test files (read the file for the scenario list):
 - `tests/bootstrap.php` — shared harness that wires an `App` with in-memory infrastructure; exposes `newApp(string $now, list<Record> $records, list<string> $typeNames)`
 - `tests/CmdLocalLifecycle.phpt` — `track` / `end` / `pause` / `resume` single-command coverage
 - `tests/CmdLocalAnnotate.phpt` — `type` / `switch` / `note`
-- `tests/CmdLocalEdit.phpt` — `at` / `before` / `after` / `skip` / `grab`
+- `tests/CmdLocalEdit.phpt` — `at` / `before` / `after` / `fit` / `skip` / `grab`
 - `tests/CmdLocalSnapshot.phpt` — `checkout` / `days` / `status`
 - `tests/CmdLocalCombo.phpt` — multi-command flows
 - `tests/CmdLocalInterruption.phpt` — auto-pause/auto-resume flow, explicit `interrupt`, status-field lifecycle

@@ -7,6 +7,17 @@ port: 1985
 
 closedIssueRetentionDays: 90
 
+# -- notifications -----------------------------------------------------------------------------------------------------
+
+# Print notification banner after each command when new activity is found
+notifyStdout: true
+
+# Fire notify-send desktop notifications (requires libnotify; off by default)
+notifyDesktop: false
+
+# Minimum minutes between YouTrack checks for non-refresh commands (0 = always check)
+notificationCooldownMinutes: 15
+
 # -- custom commands & aliases -----------------------------------------------------------------------------------------
 
 customCommands:
@@ -19,11 +30,7 @@ customCommands:
     review:
         parent: track
         type: 'Test / Review'
-    meeting:
-        parent: interrupt
-        issue: SW-4002
-        type: 'Communication, Meetings, ...'
-    mail:
+    communication:
         parent: interrupt
         issue: SW-4002
         type: 'Communication, Meetings, ...'
@@ -37,6 +44,9 @@ commandAliases:
     continue: resume
     design: analyse
     test: review
+    meeting: communication
+    mail: communication
+    stop: end
 
 # -- work item types ---------------------------------------------------------------------------------------------------
 
@@ -57,6 +67,7 @@ typeAliases:
 
 # YouTrack names → color
 typeColors:
+    'Analyses / Design':             lblue
     'Implementation':                lgreen
     'Test / Review':                 cyan
     'Documentation':                 blue

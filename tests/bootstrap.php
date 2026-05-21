@@ -9,10 +9,14 @@ use Timeshit\Local\Record;
 use Timeshit\LocalServer;
 use Timeshit\Util\BufferedIo;
 use Timeshit\Util\FixedClock;
+use Timeshit\Youtrack\CommentsCache;
+use Timeshit\Youtrack\IssueCache;
+use Timeshit\Youtrack\NotificationChecker;
 use Timeshit\Youtrack\StubIssueDataProvider;
 use Timeshit\Youtrack\StubTypeProvider;
 use Timeshit\Youtrack\StubWorkItemPusher;
 use Timeshit\Youtrack\WorkItemType;
+use Timeshit\Youtrack\YoutrackClient;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -73,6 +77,9 @@ function newApp(
         editor: 'true',
         closedIssueRetentionDays: 90,
         port: 1985,
+        notifyStdout: false,
+        notifyDesktop: false,
+        notificationCooldownMinutes: 999999,
     );
     $store = new InMemoryRecordStore($records);
     $clock = new FixedClock($now);
@@ -83,6 +90,13 @@ function newApp(
     }
     $configurator = new Configurator(__DIR__ . '/_fixtures', $io);
     $pusher = new StubWorkItemPusher();
+    $notifications = new NotificationChecker(
+        client: new YoutrackClient('https://example.youtrack.cloud', 'fake-token'),
+        commentsCache: new CommentsCache('/tmp/timeshit-test-comments.neon'),
+        issueCache: new IssueCache('/tmp/timeshit-test-issues.neon'),
+        io: $io,
+        cooldownMinutes: 999999,
+    );
     $app = new App(
         config: $config,
         store: $store,
@@ -93,6 +107,7 @@ function newApp(
         configurator: $configurator,
         pusher: $pusher,
         server: new LocalServer(__DIR__ . '/_fixtures/server.pid', __DIR__ . '/_fixtures/server.php', 1985, $io),
+        notifications: $notifications,
     );
 
     return [$app, $store, $clock, $io, $pusher];

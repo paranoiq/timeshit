@@ -30,10 +30,47 @@ $snapshot = $store->load();
 Assert::same(0, $app->run(['ts', 'type', 'documentation']));
 Assert::equal($snapshot, $store->load());
 
-// 3. type with no open record errors
+// 3. type with no records errors
 [$app, , , $io] = newApp();
 Assert::same(1, $app->run(['ts', 'type', 'doc']));
-Assert::contains('no open tracking entry', $io->getErr());
+Assert::contains('no entry to update', $io->getErr());
+
+// 3a. type with no open record falls back to the last closed
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'end']);
+Assert::same(0, $app->run(['ts', 'type', 'doc']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('Documentation', $items[0]->type);
+Assert::same('2026-05-09 10:30', $items[0]->endedAt);
+Assert::contains('updated type Documentation at 2026-05-09 10:30 (type)', $items[0]->log);
+
+// 3b. type skips an untracked break record and targets the real record behind it
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+10 minutes');
+$app->run(['ts', 'pause']); // opens an untracked break record
+Assert::same(0, $app->run(['ts', 'type', 'doc']));
+$items = $store->load();
+Assert::same('Documentation', $items[0]->type); // real record changed
+Assert::same('', $items[1]->type);              // untracked break untouched
+Assert::same('untracked', $items[1]->status);
+
+// 3c. type with only an untracked record errors (no eligible target)
+$break = new Record(
+    id: 1,
+    issueId: '',
+    type: '',
+    startedAt: '2026-05-09 10:00',
+    endedAt: null,
+    log: 'created at 2026-05-09 10:00 (pause)',
+    status: 'untracked',
+);
+[$app, , , $io] = newApp('2026-05-09 10:00', [$break]);
+Assert::same(1, $app->run(['ts', 'type', 'doc']));
+Assert::contains('no entry to update', $io->getErr());
 
 // 4. type with unknown name errors
 [$app, $store, , $io] = newApp('2026-05-09 10:00');
@@ -213,3 +250,99 @@ $app->run(['ts', 'track', 'ABC-1']);
 $io->clear();
 Assert::same(1, $app->run(['ts', 'note', '#99', 'nope']));
 Assert::contains('entry #99 not found', $io->getErr());
+
+
+// === fix (change the issue id of the last non-day record) ===
+
+// 21. fix on an open record swaps issueId; preserves type/startedAt; logs the edit
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+15 minutes');
+Assert::same(0, $app->run(['ts', 'fix', 'XYZ-2']));
+$items = $store->load();
+Assert::count(1, $items);
+Assert::same('XYZ-2', $items[0]->issueId);
+Assert::same('Implementation', $items[0]->type);
+Assert::same('2026-05-09 10:00', $items[0]->startedAt);
+Assert::null($items[0]->endedAt);
+Assert::contains('edited issueId from ABC-1 to XYZ-2 at 2026-05-09 10:15 (fix)', $items[0]->log);
+
+// 22. fix lowercases & expands a bare numeric id using defaultIssuePrefix
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+Assert::same(0, $app->run(['ts', 'fix', '42']));
+Assert::same('SW-42', $store->load()[0]->issueId);
+
+// 23. fix with the same id is a no-op
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$snapshot = $store->load();
+Assert::same(0, $app->run(['ts', 'fix', 'ABC-1']));
+Assert::equal($snapshot, $store->load());
+
+// 24. fix with no open record falls back to the last closed
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'end']);
+Assert::same(0, $app->run(['ts', 'fix', 'XYZ-2']));
+$items = $store->load();
+Assert::same('XYZ-2', $items[0]->issueId);
+Assert::contains('edited issueId from ABC-1 to XYZ-2', $items[0]->log);
+
+// 25. fix with no records errors
+[$app, , , $io] = newApp();
+Assert::same(1, $app->run(['ts', 'fix', 'ABC-1']));
+Assert::contains('no entry to fix', $io->getErr());
+
+// 26. fix missing issue arg errors
+[$app, , , $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$io->clear();
+Assert::same(1, $app->run(['ts', 'fix']));
+Assert::contains('missing <issue>', $io->getErr());
+
+// 27. fix refuses to assign an issue to an untracked break record
+[$app, $store, $clock, $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+10 minutes');
+$app->run(['ts', 'pause']); // creates an open untracked break record
+$snapshot = $store->load();
+$io->clear();
+Assert::same(1, $app->run(['ts', 'fix', 'XYZ-2']));
+Assert::contains('untracked', $io->getErr());
+Assert::equal($snapshot, $store->load());
+
+// 28. fix #id targets a closed earlier record
+[$app, $store, $clock] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'end']);
+$clock->advance('+30 minutes');
+$app->run(['ts', 'track', 'ABC-2']);
+Assert::same(0, $app->run(['ts', 'fix', '#1', 'XYZ-9']));
+$items = $store->load();
+Assert::same('XYZ-9', $items[0]->issueId);
+Assert::same('ABC-2', $items[1]->issueId);
+Assert::contains('edited issueId from ABC-1 to XYZ-9', $items[0]->log);
+
+// 29. fix #id with unknown id errors
+[$app, , , $io] = newApp('2026-05-09 10:00');
+$app->run(['ts', 'track', 'ABC-1']);
+$io->clear();
+Assert::same(1, $app->run(['ts', 'fix', '#99', 'XYZ-2']));
+Assert::contains('entry #99 not found', $io->getErr());
+
+// 30. fix #id refuses day records
+$dayRecordForFix = new Record(
+    id: 1,
+    issueId: 'OOO-1',
+    type: 'Out of office',
+    startedAt: '2026-05-08 09:00',
+    endedAt: '2026-05-08 17:00',
+    log: 'created at 2026-05-08 09:00 (day) | closed at 2026-05-08 17:00 (day)',
+    status: 'day',
+);
+[$app, , , $io] = newApp('2026-05-09 10:00', [$dayRecordForFix]);
+Assert::same(1, $app->run(['ts', 'fix', '#1', 'XYZ-2']));
+Assert::contains('refusing to edit day entry #1', $io->getErr());

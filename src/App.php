@@ -18,14 +18,18 @@ use Timeshit\Util\Clock;
 use Timeshit\Util\Io;
 use Timeshit\Util\SystemClock;
 use Timeshit\View\AllView;
+use Timeshit\View\FlowView;
 use Timeshit\View\IssuesView;
 use Timeshit\View\RecordsView;
 use Timeshit\Youtrack\CachedIssueDataProvider;
 use Timeshit\Youtrack\CachedTypeProvider;
+use Timeshit\Youtrack\CommentsCache;
 use Timeshit\Youtrack\HttpWorkItemPusher;
 use Timeshit\Youtrack\Issue;
 use Timeshit\Youtrack\IssueCache;
 use Timeshit\Youtrack\IssueDataProvider;
+use Timeshit\Youtrack\Notification;
+use Timeshit\Youtrack\NotificationChecker;
 use Timeshit\Youtrack\TypeProvider;
 use Timeshit\Youtrack\WorkItemCache;
 use Timeshit\Youtrack\WorkItemPusher;
@@ -39,6 +43,8 @@ use function count;
 use function ctype_digit;
 use function date_default_timezone_set;
 use function escapeshellarg;
+use function mb_strlen;
+use function mb_substr;
 use function file_get_contents;
 use function file_put_contents;
 use function proc_close;
@@ -71,6 +77,8 @@ final class App
     private const WORK_ITEM_TYPES_FILE = '/data/work-item-types.neon';
     private const RECORDS_FILE = '/data/records.neon';
     private const ARCHIVE_FILE = '/data/archive.neon';
+    private const COMMENTS_CACHE_FILE = '/data/comments.neon';
+
     public function __construct(
         private readonly Config $config,
         private readonly RecordStore $store,
@@ -81,6 +89,7 @@ final class App
         private readonly Configurator $configurator,
         private readonly WorkItemPusher $pusher,
         private readonly LocalServer $server,
+        private readonly NotificationChecker $notifications,
     ) {}
 
     /** Wires the file/network-backed implementations from a project root directory. */
@@ -92,13 +101,21 @@ final class App
             $client,
             $io,
         );
+        $issueCache = new IssueCache($rootDir . self::ISSUES_CACHE_FILE);
         $issueData = new CachedIssueDataProvider(
-            new IssueCache($rootDir . self::ISSUES_CACHE_FILE),
+            $issueCache,
             new WorkItemCache($rootDir . self::WORK_ITEMS_CACHE_FILE),
             $client,
             $io,
             $config->youtrackBaseUrl,
             $config->closedIssueRetentionDays,
+        );
+        $notifications = new NotificationChecker(
+            client: $client,
+            commentsCache: new CommentsCache($rootDir . self::COMMENTS_CACHE_FILE),
+            issueCache: $issueCache,
+            io: $io,
+            cooldownMinutes: $config->notificationCooldownMinutes,
         );
 
         return new self(
@@ -111,6 +128,7 @@ final class App
             configurator: new Configurator($rootDir, $io),
             pusher: new HttpWorkItemPusher($client),
             server: LocalServer::forRoot($rootDir, $config->port, $io),
+            notifications: $notifications,
         );
     }
 
@@ -194,7 +212,12 @@ final class App
             return $this->ambiguousCommand($e->getMessage());
         }
         if ($resolved === null) {
-            return $this->unknownCommand($input);
+            if (Resolver::looksLikeIssueId($input)) {
+                array_splice($argv, 1, 0, ['track']);
+                $resolved = 'track';
+            } else {
+                return $this->unknownCommand($input);
+            }
         }
         if (isset($this->config->commandAliases[$resolved])) {
             $resolved = $this->config->commandAliases[$resolved];
@@ -225,6 +248,7 @@ final class App
                 'time' => $this->cmdTime($argv[2] ?? null),
                 'archive' => $this->cmdArchive($argv[2] ?? null),
                 'status' => $this->cmdStatus(),
+                'flow' => $this->cmdFlow(),
                 'refresh' => $this->cmdRefresh(),
                 'track' => $this->cmdTrack($argv[2] ?? null, $argv[3] ?? null, $noteArg),
                 'interrupt' => $this->cmdInterrupt($argv[2] ?? null, $argv[3] ?? null, $noteArg),
@@ -246,6 +270,8 @@ final class App
                 'at' => $this->cmdAt(Resolver::restArgs($argv)),
                 'before' => $this->cmdBefore(Resolver::restArgs($argv)),
                 'after' => $this->cmdAfter(Resolver::restArgs($argv)),
+                'fit' => $this->cmdFit(),
+                'fix' => $this->cmdFix(Resolver::restArgs($argv)),
                 'push' => $this->cmdPush($argv[2] ?? null),
                 'server' => $this->server->cmd($argv[2] ?? null),
                 'configure' => $this->configurator->run(),
@@ -257,7 +283,78 @@ final class App
             return 1;
         }
 
+        if ($resolved !== 'configure' && $resolved !== 'help' && $resolved !== 'server'
+            && ($this->config->notifyStdout || $this->config->notifyDesktop)
+        ) {
+            try {
+                $found = $this->notifications->check($resolved === 'refresh');
+                if ($this->config->notifyStdout) {
+                    $this->renderNotifications($found);
+                }
+                if ($this->config->notifyDesktop) {
+                    foreach ($found as $n) {
+                        $this->desktopNotify($n);
+                    }
+                }
+            } catch (Throwable) {
+                // Notification failure must never crash the CLI.
+            }
+        }
+
         return 0;
+    }
+
+    /** @param list<Notification> $notifications */
+    private function renderNotifications(array $notifications): void
+    {
+        if ($notifications === []) {
+            return;
+        }
+        $count = count($notifications);
+        $label = $count === 1 ? '1 notification' : "{$count} notifications";
+        $this->io->out("\n" . Ansi::lyellow("─── {$label} ") . Ansi::lblack(str_repeat('─', 42)) . "\n");
+
+        $baseUrl = rtrim($this->config->youtrackBaseUrl, '/');
+        foreach ($notifications as $n) {
+            $url = $baseUrl . '/issue/' . $n->issueId;
+            $ref = Ansi::link($url, sprintf('%-12s', $n->issueId));
+            switch ($n->kind) {
+                case Notification::KIND_ASSIGNED:
+                    $this->io->out("  {$ref}  " . Ansi::lgreen('you were assigned') . "\n");
+                    break;
+                case Notification::KIND_STATE_CHANGE:
+                    $this->io->out("  {$ref}  state: " . Ansi::lyellow($n->payload) . "\n");
+                    break;
+                case Notification::KIND_COMMENT:
+                    $preview = mb_strlen($n->payload) > 80
+                        ? mb_substr($n->payload, 0, 80) . '…'
+                        : $n->payload;
+                    $this->io->out("  {$ref}  comment from " . Ansi::lwhite($n->author) . "\n");
+                    $this->io->out("               " . Ansi::lblack('"' . $preview . '"') . "\n");
+                    break;
+            }
+            if ($n->issueTitle !== '') {
+                $this->io->out("               " . Ansi::lblack($n->issueTitle) . "\n");
+            }
+        }
+    }
+
+    private function desktopNotify(Notification $n): void
+    {
+        $summary = match ($n->kind) {
+            Notification::KIND_ASSIGNED => "timeshit: assigned {$n->issueId}",
+            Notification::KIND_STATE_CHANGE => "timeshit: {$n->issueId} state changed",
+            Notification::KIND_COMMENT => "timeshit: new comment on {$n->issueId}",
+            default => "timeshit: {$n->issueId}",
+        };
+        $titleLine = $n->issueTitle !== '' ? $n->issueTitle . "\n" : '';
+        $body = match ($n->kind) {
+            Notification::KIND_ASSIGNED => "{$titleLine}You were assigned",
+            Notification::KIND_STATE_CHANGE => "{$titleLine}{$n->payload}",
+            Notification::KIND_COMMENT => "{$n->author}: " . mb_substr($n->payload, 0, 200),
+            default => $n->payload,
+        };
+        @exec('notify-send ' . escapeshellarg($summary) . ' ' . escapeshellarg($body) . ' 2>/dev/null');
     }
 
     private function unknownCommand(string $command): int
@@ -292,6 +389,23 @@ final class App
             ));
         }
         (new IssuesView($this->config->youtrackBaseUrl, $data['user'], $this->config->issueStates, $this->config->categoryColors))->render($issues, $data['workItems'], $this->store->load());
+    }
+
+    private function cmdFlow(): void
+    {
+        $now = $this->clock->now();
+        $rangeStart = $now->modify('monday this week')->setTime(0, 0)->modify('-7 days');
+        $today = $now->format('Y-m-d');
+        $records = array_merge($this->store->loadArchive(), $this->store->load());
+        $filtered = array_values(array_filter(
+            $records,
+            static function (Record $r) use ($rangeStart, $today): bool {
+                $date = substr($r->startedAt, 0, 10);
+                return $date >= $rangeStart->format('Y-m-d') && $date <= $today;
+            },
+        ));
+        (new FlowView($this->config->typeColors, $this->config->typeShortNames))
+            ->render($filtered, $this->issueData->titles(), $rangeStart, $now);
     }
 
     private function cmdTime(?string $modifier): void
@@ -417,19 +531,29 @@ final class App
     private function statusLine(Record $r, string $baseUrl, array $titleByIssueId): string
     {
         $today = $this->clock->now()->format('Y-m-d');
+        $yesterday = $this->clock->now()->modify('-1 day')->format('Y-m-d');
         $startDate = substr($r->startedAt, 0, 10);
-        $startStr = $startDate === $today ? substr($r->startedAt, 11) : $r->startedAt;
+        $startTime = substr($r->startedAt, 11);
+        $startStr = match ($startDate) {
+            $today     => $startTime,
+            $yesterday => 'yesterday ' . $startTime,
+            default    => (new DateTimeImmutable($startDate))->format('D j.n.') . ' ' . $startTime,
+        };
 
         if ($r->endedAt === null) {
             $now = $this->clock->nowMinute();
             $minutes = max(0, intdiv((new DateTimeImmutable($now))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));
-            $duration = Format::spent($minutes, null, false) . Ansi::lblack('so far');
+            $duration = Format::spent($minutes, null, false) . ' ' . Ansi::lblack('so far');
             $timeRange = $startStr . ' → ' . Ansi::lgreen('…');
         } else {
             $endDate = substr($r->endedAt, 0, 10);
-            $endStr = $endDate === $today && $startDate === $today
-                ? substr($r->endedAt, 11)
-                : $r->endedAt;
+            $endTime = substr($r->endedAt, 11);
+            $endStr = match (true) {
+                $endDate === $startDate => $endTime,
+                $endDate === $today    => $endTime,
+                $endDate === $yesterday => 'yesterday ' . $endTime,
+                default                => (new DateTimeImmutable($endDate))->format('D j.n.') . ' ' . $endTime,
+            };
             $minutes = max(0, intdiv((new DateTimeImmutable($r->endedAt))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));
             $duration = Format::spent($minutes, null, false);
             $timeRange = $startStr . Ansi::lblack('–') . $endStr;
@@ -533,10 +657,10 @@ final class App
         [$id, $rest] = Resolver::peelRecordId('type', $rest);
         $matched = Resolver::resolveType('type', $rest, null, $this->types->types(...), $this->config->allowedTypes, $this->config->typeAliases);
         if ($id === null) {
-            $result = $this->store->changeOpenType($matched, $this->clock->nowMinute(), 'type');
+            $result = $this->store->changeLastType($matched, $this->clock->nowMinute(), 'type');
             $item = $result['item'];
             if ($item === null) {
-                throw new RuntimeException('type: no open tracking entry to update');
+                throw new RuntimeException('type: no entry to update');
             }
             if (!$result['changed']) {
                 return;
@@ -545,8 +669,8 @@ final class App
                 "Changed type of %s %s from %s to %s\n",
                 $item->issueId,
                 Format::recordId($item->id),
-                (string) $result['previousType'],
-                $matched,
+                Format::typeInline((string) $result['previousType'], $this->config->typeColors, $this->config->typeShortNames),
+                Format::typeInline($matched, $this->config->typeColors, $this->config->typeShortNames),
             ));
 
             return;
@@ -562,8 +686,8 @@ final class App
                 "Changed type of %s %s from %s to %s\n",
                 $updated->issueId,
                 Format::recordId($updated->id),
-                $previous->type,
-                $matched,
+                Format::typeInline($previous->type, $this->config->typeColors, $this->config->typeShortNames),
+                Format::typeInline($matched, $this->config->typeColors, $this->config->typeShortNames),
             ));
         }
     }
@@ -918,6 +1042,64 @@ final class App
             [, $updated] = $result;
             $where = $updated->isOpen() ? 'active' : 'closed';
             $this->io->err(sprintf("Note on %s (%s): %s\n", $this->actionRef($updated->issueId, $updated->id), $where, Ansi::lblack('"' . $updated->note . '"')));
+        }
+    }
+
+    private function cmdFix(?string $rest): void
+    {
+        [$id, $issueArg] = Resolver::peelRecordId('fix', $rest);
+        $newIssueId = $this->resolveIssueArg('fix', $issueArg);
+        if ($id === null) {
+            $this->store->transaction(function () use ($newIssueId): void {
+                $items = $this->store->load();
+                $targetIndex = null;
+                for ($i = count($items) - 1; $i >= 0; $i--) {
+                    if ($items[$i]->status === 'day') {
+                        continue;
+                    }
+                    $targetIndex = $i;
+                    break;
+                }
+                if ($targetIndex === null) {
+                    throw new RuntimeException('fix: no entry to fix');
+                }
+                $target = $items[$targetIndex];
+                if ($target->status === 'untracked') {
+                    throw new RuntimeException('fix: refusing to assign an issue to an untracked break entry');
+                }
+                if ($target->issueId === $newIssueId) {
+                    return;
+                }
+                $previousIssueId = $target->issueId;
+                $items[$targetIndex] = $target->withIssueId($newIssueId, $this->clock->nowMinute(), 'fix');
+                $this->store->save(array_values($items));
+                $this->io->err(sprintf(
+                    "Changed issue of %s from %s to %s\n",
+                    Format::recordId($items[$targetIndex]->id),
+                    $previousIssueId === '' ? Ansi::lblack('(none)') : $previousIssueId,
+                    $this->actionRef($newIssueId, $items[$targetIndex]->id),
+                ));
+            });
+
+            return;
+        }
+        $result = $this->modifyRecordById('fix', $id, function (Record $current) use ($newIssueId): ?Record {
+            if ($current->status === 'untracked') {
+                throw new RuntimeException("fix: refusing to assign an issue to untracked entry #{$current->id}");
+            }
+
+            return $current->issueId === $newIssueId
+                ? null
+                : $current->withIssueId($newIssueId, $this->clock->nowMinute(), 'fix');
+        });
+        if ($result !== null) {
+            [$previous, $updated] = $result;
+            $this->io->err(sprintf(
+                "Changed issue of %s from %s to %s\n",
+                Format::recordId($updated->id),
+                $previous->issueId === '' ? Ansi::lblack('(none)') : $previous->issueId,
+                $this->actionRef($updated->issueId, $updated->id),
+            ));
         }
     }
 
@@ -1356,7 +1538,7 @@ final class App
                     $issueId,
                     Format::recordId($record->id),
                     $day->format('Y-m-d'),
-                    $type,
+                    Format::typeInline($type, $this->config->typeColors, $this->config->typeShortNames),
                 ));
             }
         });
@@ -1466,6 +1648,11 @@ final class App
         $this->modifyTimes('after', 'add', $arg, $id);
     }
 
+    private function cmdFit(): void
+    {
+        $this->modifyTimes('fit', 'fit', null, null);
+    }
+
     private function modifyTimes(string $cmd, string $mode, ?string $arg, ?int $targetId): void
     {
         $this->store->transaction(function () use ($cmd, $mode, $arg, $targetId): void {
@@ -1505,6 +1692,9 @@ final class App
         if ($cmd === 'after' && $isOpen) {
             throw new RuntimeException('after: last entry is open (use before/at to move its start)');
         }
+        if ($cmd === 'fit' && !$isOpen) {
+            throw new RuntimeException('fit: no open entry to fit');
+        }
 
         if ($isOpen) {
             $existing = $target->startedAt;
@@ -1517,6 +1707,26 @@ final class App
 
         if ($mode === 'set') {
             $newDt = Resolver::resolveTime($cmd, $arg, $existing);
+        } elseif ($mode === 'fit') {
+            $prevIndex = null;
+            for ($i = $targetIndex - 1; $i >= 0; $i--) {
+                if ($items[$i]->status !== 'day') {
+                    $prevIndex = $i;
+                    break;
+                }
+            }
+            if ($prevIndex === null) {
+                throw new RuntimeException('fit: no previous entry');
+            }
+            $prevEnd = $items[$prevIndex]->endedAt;
+            if ($prevEnd === null) {
+                throw new RuntimeException('fit: previous entry is open');
+            }
+            try {
+                $newDt = new DateTimeImmutable($prevEnd);
+            } catch (Exception) {
+                throw new RuntimeException("fit: invalid previous end time '{$prevEnd}'");
+            }
         } else {
             $spanMin = Resolver::parseSpan($cmd, $arg);
             try {
@@ -1606,7 +1816,7 @@ final class App
         if ($r->endedAt === null) {
             $now = $this->clock->nowMinute();
             $minutes = max(0, intdiv((new DateTimeImmutable($now))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));
-            $duration = Format::spent($minutes, null, false) . Ansi::lblack('so far');
+            $duration = Format::spent($minutes, null, false) . ' ' . Ansi::lblack('so far');
             $timeRange = $start . ' ' . Ansi::lblack('→') . ' ' . Ansi::lgreen('  …  ');
         } else {
             $minutes = max(0, intdiv((new DateTimeImmutable($r->endedAt))->getTimestamp() - (new DateTimeImmutable($r->startedAt))->getTimestamp(), 60));

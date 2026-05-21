@@ -226,6 +226,31 @@ final class YoutrackClient
     }
 
     /**
+     * Fetches all non-deleted comments for a single issue.
+     *
+     * @return list<IssueComment>
+     */
+    public function fetchComments(string $issueId): array
+    {
+        $raw = $this->get(
+            '/api/issues/' . rawurlencode($issueId) . '/comments',
+            ['fields' => 'id,text,author(login),created,deleted', '$top' => 500],
+        );
+        $comments = [];
+        foreach ($raw as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $comment = IssueComment::fromRaw($item, $issueId);
+            if ($comment !== null) {
+                $comments[] = $comment;
+            }
+        }
+
+        return $comments;
+    }
+
+    /**
      * Creates a work item under `$issueId` with the given duration / type /
      * date / text and returns the YouTrack-assigned work-item id.
      *

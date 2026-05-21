@@ -140,6 +140,24 @@ final class Record implements JsonSerializable
         );
     }
 
+    public function withIssueId(string $issueId, string $modifiedAt, string $trigger): self
+    {
+        $entry = self::logEdit('issueId', $this->issueId, $issueId, $modifiedAt, $trigger);
+        $log = $this->log === '' ? $entry : $this->log . ' | ' . $entry;
+
+        return new self(
+            id: $this->id,
+            issueId: $issueId,
+            type: $this->type,
+            startedAt: $this->startedAt,
+            endedAt: $this->endedAt,
+            log: $log,
+            note: $this->note,
+            status: $this->status,
+            workItemId: $this->workItemId,
+        );
+    }
+
     public function withNote(string $note, string $modifiedAt, string $trigger): self
     {
         $entry = self::logUpdate('note', '', $modifiedAt, $trigger);

@@ -39,7 +39,7 @@ final class IssueCache
         return $mtime + self::TTL_SECONDS > time();
     }
 
-    /** @return array{user: string, issues: list<Issue>, extraIds: list<string>} */
+    /** @return array{user: string, issues: list<Issue>, extraIds: list<string>, droppedIds: list<string>} */
     public function load(): array
     {
         return FileLock::shared($this->path, function (): array {
@@ -75,8 +75,17 @@ final class IssueCache
                     }
                 }
             }
+            $droppedIds = [];
+            $droppedRaw = $decoded['droppedIds'] ?? null;
+            if (is_array($droppedRaw)) {
+                foreach ($droppedRaw as $item) {
+                    if (is_string($item) && $item !== '') {
+                        $droppedIds[] = $item;
+                    }
+                }
+            }
 
-            return ['user' => $user, 'issues' => $issues, 'extraIds' => $extraIds];
+            return ['user' => $user, 'issues' => $issues, 'extraIds' => $extraIds, 'droppedIds' => $droppedIds];
         });
     }
 
@@ -84,16 +93,20 @@ final class IssueCache
      * @param list<Issue> $issues
      * @param list<string> $extraIds ids referenced by commands that didn't show up
      *                               in me-queries — kept so refresh re-fetches them
+     * @param list<string> $droppedIds ids filtered out by closedIssueRetentionDays — silenced on future refreshes
      */
-    public function save(string $user, array $issues, array $extraIds = []): void
+    public function save(string $user, array $issues, array $extraIds = [], array $droppedIds = []): void
     {
-        FileLock::exclusive($this->path, function () use ($user, $issues, $extraIds): void {
+        FileLock::exclusive($this->path, function () use ($user, $issues, $extraIds, $droppedIds): void {
             $payload = [
                 'user' => $user,
                 'issues' => array_map(static fn(Issue $i): array => (array) $i, $issues),
             ];
             if ($extraIds !== []) {
                 $payload['extraIds'] = $extraIds;
+            }
+            if ($droppedIds !== []) {
+                $payload['droppedIds'] = $droppedIds;
             }
             $neon = Neon::encode($payload, Neon::BLOCK);
             if (file_put_contents($this->path, $neon) === false) {

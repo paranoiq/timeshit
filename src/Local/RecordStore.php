@@ -50,12 +50,13 @@ interface RecordStore
     public function track(Record $next, string $trigger, bool $pauseClosed = false): array;
 
     /**
-     * Replaces the type of the latest open entry. No-op when it already has
-     * this type.
+     * Replaces the type of the latest non-`day`, non-`untracked` entry (open
+     * or closed). No-op when it already has this type. Returns a null item
+     * when no eligible entry exists.
      *
      * @return array{changed: bool, previousType: ?string, item: ?Record}
      */
-    public function changeOpenType(string $newType, string $modifiedAt, string $trigger): array;
+    public function changeLastType(string $newType, string $modifiedAt, string $trigger): array;
 
     /**
      * Closes the latest open entry. When `$appendNote` is non-null and

@@ -109,22 +109,30 @@ final class InMemoryRecordStore implements RecordStore
     }
 
     /** @return array{changed: bool, previousType: ?string, item: ?Record} */
-    public function changeOpenType(string $newType, string $modifiedAt, string $trigger): array
+    public function changeLastType(string $newType, string $modifiedAt, string $trigger): array
     {
         $items = $this->items;
-        $last = array_pop($items);
-        if ($last === null || !$last->isOpen()) {
+        $targetIndex = null;
+        for ($i = count($items) - 1; $i >= 0; $i--) {
+            $status = $items[$i]->status;
+            if ($status === 'day' || $status === 'untracked') {
+                continue;
+            }
+            $targetIndex = $i;
+            break;
+        }
+        if ($targetIndex === null) {
             return ['changed' => false, 'previousType' => null, 'item' => null];
         }
-        if ($last->type === $newType) {
-            return ['changed' => false, 'previousType' => $last->type, 'item' => $last];
+        $target = $items[$targetIndex];
+        if ($target->type === $newType) {
+            return ['changed' => false, 'previousType' => $target->type, 'item' => $target];
         }
-        $previous = $last->type;
-        $updated = $last->withType($newType, $modifiedAt, $trigger);
-        $items[] = $updated;
-        $this->items = $items;
+        $previous = $target->type;
+        $items[$targetIndex] = $target->withType($newType, $modifiedAt, $trigger);
+        $this->items = array_values($items);
 
-        return ['changed' => true, 'previousType' => $previous, 'item' => $updated];
+        return ['changed' => true, 'previousType' => $previous, 'item' => $items[$targetIndex]];
     }
 
     /** @return array{ended: bool, item: ?Record} */
